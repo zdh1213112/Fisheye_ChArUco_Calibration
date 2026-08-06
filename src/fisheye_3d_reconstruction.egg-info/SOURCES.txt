@@ -2,6 +2,8 @@ README.md
 setup.py
 src/calibration/__init__.py
 src/calibration/calibrate.py
+src/calibration/gui_app.py
+src/calibration/workflow.py
 src/fisheye_3d_reconstruction.egg-info/PKG-INFO
 src/fisheye_3d_reconstruction.egg-info/SOURCES.txt
 src/fisheye_3d_reconstruction.egg-info/dependency_links.txt

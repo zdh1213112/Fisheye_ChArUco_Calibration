@@ -4,6 +4,10 @@ This Python script provides a class for calibrating a camera using a ChArUco boa
 
 ![](docs/README_images/detected_markers.png)
 ### Getting Started
+The project is tested with `opencv-contrib-python==4.12.0.88` and
+`numpy==2.2.6`. NumPy 2.2 requires Python 3.10 or newer, so create the
+environment with Python 3.10+.
+
 To get up and running with the code base it is strongly suggested to use a virtual enviroment due to the specific versions of opencv and other libaries. This can be setup on using the following commands.
 ```
 python -m venv myenv
