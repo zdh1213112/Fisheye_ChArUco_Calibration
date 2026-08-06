@@ -6,6 +6,7 @@ from .workflow import (
     create_undistort_maps,
     create_undistort_valid_mask,
     detect_charuco,
+    fisheye_focal_scale_for_balance,
     load_calibration,
 )
 
@@ -19,5 +20,6 @@ __all__ = [
     "create_undistort_maps",
     "create_undistort_valid_mask",
     "detect_charuco",
+    "fisheye_focal_scale_for_balance",
     "load_calibration",
 ]

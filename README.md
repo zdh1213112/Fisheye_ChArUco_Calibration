@@ -172,6 +172,10 @@ undistorted_image = fisheye_calibrator.undistort_image(
     window_size=(480, 480)
 )
 ```
+The newer GUI and batch workflow use `balance=0` as the natural reference-like
+projection (`Knew=K`). Increasing balance progressively widens the field of
+view down to the previous 0.70 focal-length scale. The legacy class shown above
+retains its original focal-scale argument, where `balance=1` means `Knew=K`.
 ![](docs/README_images/undistorted.jpg)
 This method:
 1. Loads calibration parameters

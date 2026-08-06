@@ -8,6 +8,7 @@ from calibration.workflow import (
     create_charuco_board,
     create_undistort_maps,
     detect_charuco,
+    fisheye_focal_scale_for_balance,
 )
 
 
@@ -58,6 +59,23 @@ class OpenCV412CompatibilityTests(unittest.TestCase):
         self.assertEqual(map_y.dtype, np.float32)
         self.assertTrue(np.isfinite(map_x).all())
         self.assertTrue(np.isfinite(map_y).all())
+        self.assertAlmostEqual(new_camera_matrix[0, 0], 320.0)
+        self.assertAlmostEqual(new_camera_matrix[1, 1], 320.0)
+
+        _, _, wide_camera_matrix = create_undistort_maps(
+            calibration,
+            (640, 480),
+            balance=1.0,
+        )
+        self.assertAlmostEqual(wide_camera_matrix[0, 0], 224.0)
+        self.assertAlmostEqual(wide_camera_matrix[1, 1], 224.0)
+
+    def test_balance_blends_from_natural_to_wide_projection(self):
+        self.assertAlmostEqual(fisheye_focal_scale_for_balance(0.0), 1.0)
+        self.assertAlmostEqual(fisheye_focal_scale_for_balance(0.5), 0.85)
+        self.assertAlmostEqual(fisheye_focal_scale_for_balance(1.0), 0.70)
+        self.assertAlmostEqual(fisheye_focal_scale_for_balance(-1.0), 1.0)
+        self.assertAlmostEqual(fisheye_focal_scale_for_balance(2.0), 0.70)
 
 
 if __name__ == "__main__":

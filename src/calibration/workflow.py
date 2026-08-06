@@ -18,6 +18,8 @@ MIN_CALIBRATION_IMAGES = 5
 AUTO_OUTLIER_MIN_IMAGES = 10
 AUTO_OUTLIER_SIGMA = 3.0
 AUTO_OUTLIER_MAX_FRACTION = 0.20
+FISHEYE_NATURAL_FOCAL_SCALE = 1.0
+FISHEYE_WIDE_FOCAL_SCALE = 0.70
 
 
 @dataclass(frozen=True)
@@ -714,6 +716,22 @@ def load_calibration(path: Path) -> Dict[str, object]:
     return result
 
 
+def fisheye_focal_scale_for_balance(balance: float) -> float:
+    """Blend from the reference-like natural view to the wider legacy view.
+
+    ``balance=0`` keeps the calibrated focal length (the same projection used
+    by the reference project). ``balance=1`` keeps the previous 0.70-wide
+    projection for users who prefer maximum field of view.
+    """
+
+    selected_balance = float(np.clip(balance, 0.0, 1.0))
+    return float(
+        FISHEYE_NATURAL_FOCAL_SCALE
+        + selected_balance
+        * (FISHEYE_WIDE_FOCAL_SCALE - FISHEYE_NATURAL_FOCAL_SCALE)
+    )
+
+
 def create_undistort_maps(
     calibration: Dict[str, object],
     frame_size: Tuple[int, int],
@@ -723,10 +741,11 @@ def create_undistort_maps(
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Create cached remap matrices for real-time undistortion.
 
-    For fisheye cameras, ``projection_alpha=1`` is the standard rectilinear
-    projection. Values below 1 progressively compress the image periphery;
-    ``0.5`` is the stereographic projection. The mapping still uses the
-    calibrated camera matrix and fisheye distortion coefficients.
+    For fisheye cameras, ``balance=0`` uses the calibrated focal length for a
+    natural, reference-like result. Increasing balance progressively widens
+    the view down to the project's previous 0.70 focal scale. In addition,
+    ``projection_alpha=1`` is the standard rectilinear projection; values
+    below 1 progressively compress the image periphery.
     """
 
     width, height = int(frame_size[0]), int(frame_size[1])
@@ -749,10 +768,11 @@ def create_undistort_maps(
 
     if model == "fisheye":
         distortion = distortion.reshape(-1, 1)
-        # Keep one stable, wide undistorted projection. The GUI's balance
-        # control is applied later as an ROI crop between the maximum valid
-        # rectangle and the full field of view.
-        selected_focal_scale = 0.70 if focal_scale is None else float(focal_scale)
+        selected_focal_scale = (
+            fisheye_focal_scale_for_balance(balance)
+            if focal_scale is None
+            else float(focal_scale)
+        )
         if selected_focal_scale <= 0:
             raise ValueError("鱼眼矫正 focal_scale 必须大于 0。")
         projection_alpha = float(projection_alpha)

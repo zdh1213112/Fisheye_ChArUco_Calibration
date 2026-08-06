@@ -166,8 +166,8 @@ python scripts/calibration_gui.py
    ```
 
 9. 点击“开始实时矫正”，右侧会显示实时去畸变画面，左侧继续显示原始画面，便于直接对比。
-10. “边缘压缩”默认值为 `0.00`，即使用标准 OpenCV 鱼眼投影，恢复到稳定的常规去畸变效果。该参数大于 `0` 时会改用实验性的外围投影压缩，可能改变边缘直线形状；如需复现本项目原来的效果，请保持为 `0.00`。
-11. 调整 `balance`：默认值为 `0.00`，表示从完整去畸变结果中计算最大的无黑边安全矩形并裁剪；设置为 `1.00` 时保留完整视场，外围可能出现黑色无效区域。实时预览和保存的 ROI 均使用同一套标准去畸变映射。
+10. “边缘压缩”默认值为 `0.00`，即使用标准 OpenCV 鱼眼投影。该参数大于 `0` 时会使用实验性的外围投影压缩，可能改变边缘直线形状；如需自然、稳定的矫正效果，请保持为 `0.00`。
+11. 调整 `balance`：默认值 `0.00` 使用标定得到的原始焦距，与参考项目 `/home/zdh/tool/Fisheye_ChArUco_Calibration` 的投影方式一致，画面更自然、外围拉伸更小。数值增大时会平滑扩展视场，`1.00` 对应旧版项目的 `0.70` 焦距比例，能看到更多外围内容，但拉伸和黑边可能增加。每个 balance 都会单独计算映射和安全 ROI，不再复用同一张宽视场映射。
 12. 点击“保存矫正对比”，程序会在 `data/realtime_captures/<分辨率>/<时间戳>/` 中保存：
 
     ```text
@@ -182,7 +182,7 @@ python scripts/calibration_gui.py
     metadata.json                         # 分辨率、模型、参数路径等信息
     ```
 
-程序默认使用 OpenCV 鱼眼模型根据当前分辨率对应的内参矩阵 `K` 和畸变系数 `D` 计算标准去畸变坐标映射。完整结果保留实际映射产生的有效区域；没有源像素对应的位置显示为黑色无效区域，不额外应用透明边缘、可信边界或人工四边压缩。随后根据有效掩膜计算绿色安全 ROI：`balance=0` 为最大无黑边矩形，`balance=1` 为完整视场，中间值在两者之间插值。
+程序默认使用 OpenCV 鱼眼模型根据当前分辨率对应的内参矩阵 `K` 和畸变系数 `D` 计算标准去畸变坐标映射。`balance=0` 使用 `Knew=K` 的自然投影；随着 balance 增大，焦距比例从 `1.00` 平滑降低到 `0.70`，逐步增加视场。完整结果保留实际映射产生的有效区域，没有可靠源像素的位置显示为黑色；随后再根据每个投影各自的有效掩膜计算安全 ROI。
 
 实时矫正、`corrected_full.jpg` 和 `corrected_balance_*.jpg` 使用同一套标准映射。这样可以直接观察鱼眼畸变被校正后的真实直线效果，同时通过绿色框查看最终建议裁剪范围。
 
@@ -267,35 +267,36 @@ data/calibration/camera_intrinsics/
 python scripts/undistort_images.py
 ```
 
-该脚本会执行以下操作：
+该脚本默认直接使用当前 `data` 中的 640×480 标定照片进行矫正，并执行以下操作：
 
-1. 读取 `data/raw_images/descent_1/` 中的全部原始图片。
-2. 加载上一步生成的鱼眼和针孔标定参数文件。
-3. 分别使用鱼眼模型和针孔模型对每张图片进行去畸变处理。
-4. 将处理后的图片分别输出到：
-
-```text
-data/undistorted_images/
-├── fisheye/   # 使用鱼眼模型处理后的图片
-└── pinhole/   # 使用针孔模型处理后的图片
-```
-
-例如，放入以下原始图片：
+1. 读取 `data/calibration/images/640x480/` 中的全部图片。
+2. 加载 `data/calibration/camera_intrinsics/640x480/fisheye_calibration.json`。
+3. 使用与 GUI 相同的自然优化投影进行去畸变。
+4. 保存每张矫正图、原图与矫正图的并排对比，以及本次参数元数据。
 
 ```text
-data/raw_images/descent_1/image_001.jpg
+data/undistorted_images/640x480/natural_optimized/
+├── charuco_*.jpg
+├── comparisons/
+│   └── charuco_*.jpg
+└── metadata.json
 ```
 
-处理完成后会得到：
+默认 `balance=0`，效果接近参考项目但保留当前项目的有效区域检查、自动 ROI、三次插值和映射缓存优化。可以通过命令行生成更宽视场：
 
-```text
-data/undistorted_images/fisheye/image_001.jpg
-data/undistorted_images/pinhole/image_001.jpg
+```bash
+python scripts/undistort_images.py --balance 0.5
 ```
 
-原始图片不会被修改。对于鱼眼镜头，应优先查看 `fisheye/` 中的结果，也可以对比两个目录中的图片，判断哪种模型的校正效果更自然。
+也可以处理其他目录：
 
-可以修改 `scripts/undistort_images.py` 中的 `balance` 参数调整输出视场范围；当前默认值为 `1`。
+```bash
+python scripts/undistort_images.py \
+  --input-dir data/raw_images/descent_1 \
+  --output-dir data/undistorted_images/custom
+```
+
+原始图片不会被修改。运行 `python scripts/undistort_images.py --help` 可以查看全部参数。
 
 下文进一步介绍了核心类，以帮助理解项目或排查问题。如果没有标定图像，可以使用下面的代码在屏幕上生成标定板，然后拍摄标定图像。
 

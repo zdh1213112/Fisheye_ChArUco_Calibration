@@ -45,6 +45,7 @@ from .workflow import (
     create_undistort_valid_mask,
     detect_charuco,
     draw_detection,
+    fisheye_focal_scale_for_balance,
     format_calibration_result,
     list_calibration_images,
     load_calibration,
@@ -338,8 +339,8 @@ class CalibrationWindow(QMainWindow):
         self.balance_spin.setDecimals(2)
         self.balance_spin.setValue(0.0)
         self.balance_spin.setToolTip(
-            "0（推荐）：最大无黑边安全裁剪；"
-            "1：保留完整去畸变视场，外围可能有黑边"
+            "0（推荐）：参考项目风格，使用原标定焦距，画面自然且无黑边；"
+            "1：逐渐扩展到原项目的宽视场，外围拉伸和黑边可能增加"
         )
         self.balance_spin.valueChanged.connect(self.invalidate_maps)
 
@@ -384,7 +385,7 @@ class CalibrationWindow(QMainWindow):
         layout.addWidget(self.square_length_spin, 2, 1)
         layout.addWidget(QLabel("标记边长"), 2, 2)
         layout.addWidget(self.marker_length_spin, 2, 3)
-        layout.addWidget(QLabel("矫正视场 balance"), 2, 4)
+        layout.addWidget(QLabel("矫正视场（0 自然 / 1 最宽）"), 2, 4)
         layout.addWidget(self.balance_spin, 2, 5)
 
         self.image_count_label = QLabel("标定照片：0 张")
@@ -977,38 +978,36 @@ class CalibrationWindow(QMainWindow):
         projection_alpha = 1.0 - 0.5 * edge_compression
 
         try:
-            map_x, map_y, _ = create_undistort_maps(
-                self.calibration,
-                frame_size,
-                current_balance,
-                projection_alpha=projection_alpha,
+            selected_balances = tuple(
+                dict.fromkeys((0.0, 0.5, 1.0, current_balance))
             )
-            full_corrected = cv2.remap(
-                frame,
-                map_x,
-                map_y,
-                interpolation=cv2.INTER_CUBIC,
-                borderMode=cv2.BORDER_CONSTANT,
-            )
-            valid_mask = create_undistort_valid_mask(
-                self.calibration,
-                map_x,
-                map_y,
-                frame_size,
-            )
-            full_corrected[~valid_mask] = 0
-
-            diagnostic_map_x = map_x
-            diagnostic_map_y = map_y
-            diagnostic_full = full_corrected.copy()
-
+            full_by_balance: Dict[float, np.ndarray] = {}
             corrected_by_balance: Dict[float, np.ndarray] = {}
             roi_by_balance: Dict[float, Tuple[int, int, int, int]] = {}
-            diagnostic_roi_by_balance: Dict[
-                float,
-                Tuple[int, int, int, int],
-            ] = {}
-            for balance in (0.0, 0.5, 1.0, current_balance):
+            focal_scale_by_balance: Dict[float, Optional[float]] = {}
+            model = str(self.calibration.get("model", "fisheye"))
+
+            for balance in selected_balances:
+                map_x, map_y, _ = create_undistort_maps(
+                    self.calibration,
+                    frame_size,
+                    balance,
+                    projection_alpha=projection_alpha,
+                )
+                full_corrected = cv2.remap(
+                    frame,
+                    map_x,
+                    map_y,
+                    interpolation=cv2.INTER_CUBIC,
+                    borderMode=cv2.BORDER_CONSTANT,
+                )
+                valid_mask = create_undistort_valid_mask(
+                    self.calibration,
+                    map_x,
+                    map_y,
+                    frame_size,
+                )
+                full_corrected[~valid_mask] = 0
                 roi = create_balance_crop_roi(
                     self.calibration,
                     map_x,
@@ -1016,13 +1015,18 @@ class CalibrationWindow(QMainWindow):
                     frame_size,
                     balance,
                 )
+                full_by_balance[balance] = full_corrected
                 roi_by_balance[balance] = roi
                 left, top, crop_width, crop_height = roi
                 corrected_by_balance[balance] = full_corrected[
                     top : top + crop_height,
                     left : left + crop_width,
                 ].copy()
-                diagnostic_roi_by_balance[balance] = roi
+                focal_scale_by_balance[balance] = (
+                    fisheye_focal_scale_for_balance(balance)
+                    if model == "fisheye"
+                    else None
+                )
 
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
             output_dir = (
@@ -1033,7 +1037,8 @@ class CalibrationWindow(QMainWindow):
             output_dir.mkdir(parents=True, exist_ok=True)
 
             current_corrected = corrected_by_balance[current_balance]
-            current_diagnostic_roi = diagnostic_roi_by_balance[current_balance]
+            diagnostic_full = full_by_balance[current_balance]
+            current_diagnostic_roi = roi_by_balance[current_balance]
             original_path = output_dir / "original.jpg"
             corrected_path = output_dir / f"corrected_balance_{current_balance:.2f}.jpg"
             corrected_full_path = output_dir / "corrected_full.jpg"
@@ -1069,9 +1074,9 @@ class CalibrationWindow(QMainWindow):
             grid_panels = [original_panel]
             cropped_grid_panels = [original_panel]
             for balance in (0.0, 0.5, 1.0):
-                roi_panel = diagnostic_full.copy()
+                roi_panel = full_by_balance[balance].copy()
                 left, top, crop_width, crop_height = (
-                    diagnostic_roi_by_balance[balance]
+                    roi_by_balance[balance]
                 )
                 right = min(width - 1, left + crop_width - 1)
                 bottom = min(height - 1, top + crop_height - 1)
@@ -1086,7 +1091,9 @@ class CalibrationWindow(QMainWindow):
                 grid_panels.append(
                     self._comparison_panel(
                         roi_panel,
-                        f"Corrected full + ROI balance={balance:.1f}",
+                        "Corrected full + ROI "
+                        f"balance={balance:.1f} "
+                        f"scale={focal_scale_by_balance[balance] or 1.0:.2f}",
                     )
                 )
 
@@ -1138,7 +1145,11 @@ class CalibrationWindow(QMainWindow):
                 "current_balance": current_balance,
                 "edge_compression": edge_compression,
                 "projection_alpha": projection_alpha,
-                "focal_scale": 0.70,
+                "focal_scale": focal_scale_by_balance[current_balance],
+                "focal_scales": {
+                    f"{balance:.2f}": focal_scale_by_balance[balance]
+                    for balance in selected_balances
+                },
                 "saved_balances": [0.0, 0.5, 1.0],
                 "calibration_path": str(self.calibration_path or ""),
                 "files": {
