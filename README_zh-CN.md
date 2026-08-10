@@ -1,8 +1,8 @@
-# 鱼眼相机 ChArUco 标定
+# 鱼眼相机 ChArUco / 传统棋盘格标定
 
 ### 项目概述
 
-本项目提供了一个用于通过 ChArUco 标定板标定相机的 Python 类。它结合 OpenCV 中现有的 `cv.aruco` 和 `cv.fisheye` 模块，可用于鱼眼相机标定，同时也支持针孔相机。
+本项目支持通过 ChArUco 或传统黑白棋盘格标定相机。它结合 OpenCV 中的标定与 `cv.fisheye` 模块，可用于鱼眼相机标定，同时也支持针孔相机。
 
 ![](docs/README_images/detected_markers.png)
 
@@ -104,7 +104,7 @@ pip install -e . -i https://pypi.tuna.tsinghua.edu.cn/simple
 项目提供了一个可视化桌面应用，支持：
 
 - 打开 `/dev/video0` USB 鱼眼相机并显示原始实时画面。
-- 从实时画面拍摄 ChArUco 标定照片，保存前自动检查标记和角点。
+- 可选择 ChArUco 或传统黑白棋盘格，从实时画面拍摄标定照片，并在保存前自动检查角点。
 - 使用鱼眼模型或针孔模型计算相机内参矩阵 `K`、畸变系数 `D`、RMS 重投影误差、每张图片的误差和 COLMAP 参数。
 - 加载已有标定参数。
 - 同时显示原始实时画面和去畸变后的实时画面。
@@ -131,6 +131,15 @@ python scripts/calibration_gui.py
 ```
 
 ### GUI 使用流程
+
+标定板类型默认是 `ChArUco（推荐）`。如果使用传统黑白棋盘格，请在“标定板类型”中选择“传统黑白棋盘格”。此时：
+
+- “横向/纵向”填写的是**内角点数量**，不是黑白方格数量。例如 `14 × 9` 个方格应填写横向 `13`、纵向 `8`。
+- “方格边长”填写相邻内角点之间的实际距离；单位与标定结果中的平移单位一致。
+- ArUco 字典、标记边长和旧版布局选项会自动禁用。
+- 传统棋盘格拍摄目录为 `data/calibration/images/<宽>x<高>/chessboard/`，不会与已有 ChArUco 照片混用。
+- 参数文件名为 `fisheye_chessboard_calibration.json` 或 `pinhole_chessboard_calibration.json`，不会覆盖原有 ChArUco 参数。
+- 传统棋盘格检测要求完整内角点区域可见；拍摄时尤其要避免裁掉边缘、模糊和强反光。
 
 1. 在“相机设备”中选择 `/dev/video0`。如果重新插拔后设备编号发生变化，点击“刷新设备”。
 2. 选择 `1920 × 1080` 和 `60 FPS`。程序会优先使用 USB 相机支持的 MJPG 格式。

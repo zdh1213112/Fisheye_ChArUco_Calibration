@@ -1,4 +1,4 @@
-"""PySide6 desktop application for live ChArUco camera calibration."""
+"""PySide6 desktop application for ChArUco and chessboard calibration."""
 
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ from .workflow import (
     create_balance_crop_roi,
     create_undistort_maps,
     create_undistort_valid_mask,
-    detect_charuco,
+    detect_calibration_board,
     draw_detection,
     fisheye_focal_scale_for_balance,
     format_calibration_result,
@@ -222,7 +222,7 @@ class CalibrationWindow(QMainWindow):
         self.map_key: Optional[Tuple[object, ...]] = None
         self.crop_roi: Optional[Tuple[int, int, int, int]] = None
 
-        self.setWindowTitle("鱼眼相机 ChArUco 标定与实时矫正")
+        self.setWindowTitle("鱼眼相机标定与实时矫正")
         self.resize(1500, 920)
         self._build_ui()
         self._apply_style()
@@ -303,6 +303,11 @@ class CalibrationWindow(QMainWindow):
         self.model_combo.addItem("针孔模型", "pinhole")
         self.model_combo.currentIndexChanged.connect(self.model_changed)
 
+        self.pattern_combo = QComboBox()
+        self.pattern_combo.addItem("ChArUco（推荐）", "charuco")
+        self.pattern_combo.addItem("传统黑白棋盘格", "chessboard")
+        self.pattern_combo.currentIndexChanged.connect(self.pattern_changed)
+
         self.dictionary_combo = QComboBox()
         for name in (
             "DICT_5X5_100",
@@ -360,6 +365,7 @@ class CalibrationWindow(QMainWindow):
         self.legacy_pattern_checkbox.setToolTip(
             "仅适用于 OpenCV 4.6 之前生成的偶数行 ChArUco 标定板"
         )
+        self.image_count_label = QLabel("标定照片：0 张")
 
         device_layout = QHBoxLayout()
         device_layout.addWidget(self.device_combo, 1)
@@ -374,26 +380,32 @@ class CalibrationWindow(QMainWindow):
 
         layout.addWidget(QLabel("标定模型"), 1, 0)
         layout.addWidget(self.model_combo, 1, 1)
-        layout.addWidget(QLabel("ArUco 字典"), 1, 2)
-        layout.addWidget(self.dictionary_combo, 1, 3)
-        layout.addWidget(QLabel("纵向方格"), 1, 4)
-        layout.addWidget(self.vertical_spin, 1, 5)
-        layout.addWidget(QLabel("横向方格"), 1, 6)
-        layout.addWidget(self.horizontal_spin, 1, 7)
+        layout.addWidget(QLabel("标定板类型"), 1, 2)
+        layout.addWidget(self.pattern_combo, 1, 3)
+        self.dictionary_label = QLabel("ArUco 字典")
+        layout.addWidget(self.dictionary_label, 1, 4)
+        layout.addWidget(self.dictionary_combo, 1, 5)
+        layout.addWidget(self.legacy_pattern_checkbox, 1, 6)
 
-        layout.addWidget(QLabel("方格边长"), 2, 0)
-        layout.addWidget(self.square_length_spin, 2, 1)
-        layout.addWidget(QLabel("标记边长"), 2, 2)
-        layout.addWidget(self.marker_length_spin, 2, 3)
-        layout.addWidget(QLabel("矫正视场（0 自然 / 1 最宽）"), 2, 4)
-        layout.addWidget(self.balance_spin, 2, 5)
+        self.vertical_label = QLabel("纵向方格")
+        layout.addWidget(self.vertical_label, 2, 0)
+        layout.addWidget(self.vertical_spin, 2, 1)
+        self.horizontal_label = QLabel("横向方格")
+        layout.addWidget(self.horizontal_label, 2, 2)
+        layout.addWidget(self.horizontal_spin, 2, 3)
+        layout.addWidget(QLabel("方格边长"), 2, 4)
+        layout.addWidget(self.square_length_spin, 2, 5)
+        self.marker_length_label = QLabel("标记边长")
+        layout.addWidget(self.marker_length_label, 2, 6)
+        layout.addWidget(self.marker_length_spin, 2, 7)
 
-        self.image_count_label = QLabel("标定照片：0 张")
-        layout.addWidget(self.legacy_pattern_checkbox, 2, 6)
-        layout.addWidget(self.image_count_label, 2, 7)
-        layout.addWidget(QLabel("边缘压缩"), 3, 0)
-        layout.addWidget(self.edge_compression_spin, 3, 1)
+        layout.addWidget(QLabel("矫正视场（0 自然 / 1 最宽）"), 3, 0)
+        layout.addWidget(self.balance_spin, 3, 1)
+        layout.addWidget(QLabel("边缘压缩"), 3, 2)
+        layout.addWidget(self.edge_compression_spin, 3, 3)
+        layout.addWidget(self.image_count_label, 3, 6, 1, 2)
         self.resolution_combo.currentIndexChanged.connect(self.resolution_changed)
+        self.pattern_changed()
         return group
 
     def _build_action_bar(self) -> QHBoxLayout:
@@ -471,6 +483,7 @@ class CalibrationWindow(QMainWindow):
 
     def board_config(self) -> BoardConfig:
         config = BoardConfig(
+            pattern_type=self.selected_pattern(),
             dictionary_name=str(self.dictionary_combo.currentData()),
             squares_vertical=self.vertical_spin.value(),
             squares_horizontal=self.horizontal_spin.value(),
@@ -483,6 +496,9 @@ class CalibrationWindow(QMainWindow):
 
     def selected_model(self) -> str:
         return str(self.model_combo.currentData())
+
+    def selected_pattern(self) -> str:
+        return str(self.pattern_combo.currentData())
 
     def active_frame_size(self) -> Tuple[int, int]:
         if self.current_frame_size is not None:
@@ -499,6 +515,8 @@ class CalibrationWindow(QMainWindow):
         frame_size: Optional[Tuple[int, int]] = None,
     ) -> Path:
         directory = self.images_root / self.resolution_key(frame_size)
+        if self.selected_pattern() == "chessboard":
+            directory /= "chessboard"
         directory.mkdir(parents=True, exist_ok=True)
         return directory
 
@@ -519,7 +537,7 @@ class CalibrationWindow(QMainWindow):
         directory = (
             self.detected_images_root
             / self.resolution_key(frame_size)
-            / f"{timestamp}_{model}"
+            / f"{timestamp}_{self.selected_pattern()}_{model}"
         )
         directory.mkdir(parents=True, exist_ok=True)
         return directory
@@ -530,7 +548,8 @@ class CalibrationWindow(QMainWindow):
         frame_size: Optional[Tuple[int, int]] = None,
     ) -> Path:
         selected = model or self.selected_model()
-        return self.calibration_intrinsics_dir(frame_size) / f"{selected}_calibration.json"
+        suffix = "" if self.selected_pattern() == "charuco" else "_chessboard"
+        return self.calibration_intrinsics_dir(frame_size) / f"{selected}{suffix}_calibration.json"
 
     def migrate_legacy_data(self) -> None:
         moved_images = 0
@@ -769,13 +788,20 @@ class CalibrationWindow(QMainWindow):
         try:
             config = self.board_config()
             frame = self.current_frame.copy()
-            detection = detect_charuco(frame, config)
+            detection = detect_calibration_board(frame, config)
         except Exception as error:  # noqa: BLE001
             QMessageBox.warning(self, "检测失败", str(error))
             return
 
         if detection.corner_count < MIN_CORNERS_PER_IMAGE:
-            if detection.marker_count >= 10 and detection.corner_count == 0:
+            if config.pattern_type == "chessboard":
+                message = (
+                    "当前画面未检测到完整的传统棋盘格内角点。\n\n"
+                    f"请确认参数填写的是内角点数：横向 {config.squares_horizontal}、"
+                    f"纵向 {config.squares_vertical}。例如 14×9 个方格应填写 13×8 个内角点。\n"
+                    "传统棋盘格需要完整可见，并应保持清晰、无强反光。"
+                )
+            elif detection.marker_count >= 10 and detection.corner_count == 0:
                 message = (
                     f"当前画面检测到 {detection.marker_count} 个 ArUco 标记，但没有"
                     "生成 ChArUco 角点。\n\n"
@@ -796,7 +822,8 @@ class CalibrationWindow(QMainWindow):
         output_dir = self.calibration_images_dir(
             (int(frame.shape[1]), int(frame.shape[0]))
         )
-        output_path = output_dir / f"charuco_{timestamp}.jpg"
+        prefix = "chessboard" if config.pattern_type == "chessboard" else "charuco"
+        output_path = output_dir / f"{prefix}_{timestamp}.jpg"
         if not cv2.imwrite(str(output_path), frame):
             QMessageBox.critical(self, "保存失败", f"无法保存图片：{output_path}")
             return
@@ -804,10 +831,13 @@ class CalibrationWindow(QMainWindow):
         annotated = draw_detection(frame, detection)
         self.raw_video.show_bgr_frame(annotated)
         self.refresh_image_count()
-        message = (
-            f"已保存 {output_path.name}；检测到 {detection.marker_count} 个标记、"
-            f"{detection.corner_count} 个角点。"
-        )
+        if config.pattern_type == "chessboard":
+            message = f"已保存 {output_path.name}；检测到 {detection.corner_count} 个内角点。"
+        else:
+            message = (
+                f"已保存 {output_path.name}；检测到 {detection.marker_count} 个标记、"
+                f"{detection.corner_count} 个角点。"
+            )
         self.append_log(message)
         self.set_status(message)
 
@@ -1203,6 +1233,38 @@ class CalibrationWindow(QMainWindow):
             self.corrected_video.clear_frame()
             self.save_comparison_button.setEnabled(False)
             self.invalidate_maps()
+
+    @Slot()
+    def pattern_changed(self) -> None:
+        chessboard = self.selected_pattern() == "chessboard"
+        self.dictionary_label.setEnabled(not chessboard)
+        self.dictionary_combo.setEnabled(not chessboard)
+        self.marker_length_label.setEnabled(not chessboard)
+        self.marker_length_spin.setEnabled(not chessboard)
+        self.legacy_pattern_checkbox.setEnabled(not chessboard)
+        self.vertical_label.setText("纵向内角点" if chessboard else "纵向方格")
+        self.horizontal_label.setText("横向内角点" if chessboard else "横向方格")
+        tip = (
+            "传统棋盘格填写内角点数量；例如 14×9 个方格应填写横向 13、纵向 8。"
+            if chessboard
+            else "ChArUco 填写方格数量。"
+        )
+        self.vertical_spin.setToolTip(tip)
+        self.horizontal_spin.setToolTip(tip)
+        if self.calibration:
+            board = self.calibration.get("board") or {}
+            loaded_pattern = str(board.get("pattern_type", "charuco"))
+            if loaded_pattern != self.selected_pattern():
+                self.calibration = None
+                self.calibration_path = None
+                self.correction_enabled = False
+                self.correction_button.setText("开始实时矫正")
+                self.parameters_text.clear()
+                self.corrected_video.clear_frame()
+                self.save_comparison_button.setEnabled(False)
+                self.invalidate_maps()
+        if hasattr(self, "image_count_label"):
+            self.refresh_image_count()
 
     @Slot()
     def invalidate_maps(self) -> None:

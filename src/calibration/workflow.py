@@ -1,4 +1,4 @@
-"""Reusable ChArUco calibration helpers for scripts and GUI applications."""
+"""Reusable ChArUco and chessboard calibration helpers."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ FISHEYE_WIDE_FOCAL_SCALE = 0.70
 
 @dataclass(frozen=True)
 class BoardConfig:
-    """Physical and dictionary settings for a ChArUco board."""
+    """Physical settings for a ChArUco or traditional chessboard."""
 
     dictionary_name: str = "DICT_5X5_100"
     squares_vertical: int = 9
@@ -32,16 +32,23 @@ class BoardConfig:
     square_length: float = 0.020
     marker_length: float = 0.015
     legacy_pattern: bool = False
+    pattern_type: str = "charuco"
 
     def validate(self) -> None:
-        if not hasattr(cv2.aruco, self.dictionary_name):
-            raise ValueError(f"OpenCV 不支持 ArUco 字典：{self.dictionary_name}")
+        if self.pattern_type not in {"charuco", "chessboard"}:
+            raise ValueError(f"不支持的标定板类型：{self.pattern_type}")
         if self.squares_vertical < 2 or self.squares_horizontal < 2:
-            raise ValueError("标定板横向和纵向方格数量必须至少为 2。")
-        if self.square_length <= 0 or self.marker_length <= 0:
-            raise ValueError("方格边长和 ArUco 标记边长必须大于 0。")
-        if self.marker_length >= self.square_length:
-            raise ValueError("ArUco 标记边长必须小于棋盘方格边长。")
+            unit = "内角点数量" if self.pattern_type == "chessboard" else "方格数量"
+            raise ValueError(f"标定板横向和纵向{unit}必须至少为 2。")
+        if self.square_length <= 0:
+            raise ValueError("方格边长必须大于 0。")
+        if self.pattern_type == "charuco":
+            if not hasattr(cv2.aruco, self.dictionary_name):
+                raise ValueError(f"OpenCV 不支持 ArUco 字典：{self.dictionary_name}")
+            if self.marker_length <= 0:
+                raise ValueError("ArUco 标记边长必须大于 0。")
+            if self.marker_length >= self.square_length:
+                raise ValueError("ArUco 标记边长必须小于棋盘方格边长。")
 
     @property
     def dictionary_id(self) -> int:
@@ -55,6 +62,8 @@ class DetectionResult:
     marker_ids: Optional[np.ndarray]
     charuco_corners: Optional[np.ndarray]
     charuco_ids: Optional[np.ndarray]
+    pattern_type: str = "charuco"
+    pattern_size: Optional[Tuple[int, int]] = None
 
     @property
     def marker_count(self) -> int:
@@ -63,6 +72,18 @@ class DetectionResult:
     @property
     def corner_count(self) -> int:
         return 0 if self.charuco_ids is None else int(len(self.charuco_ids))
+
+    @property
+    def corners(self) -> Optional[np.ndarray]:
+        """Detected calibration corners (legacy ChArUco name kept compatible)."""
+
+        return self.charuco_corners
+
+    @property
+    def ids(self) -> Optional[np.ndarray]:
+        """Point indices matching the calibration-board object points."""
+
+        return self.charuco_ids
 
 
 def create_charuco_board(config: BoardConfig):
@@ -118,6 +139,34 @@ def detect_charuco(image: np.ndarray, config: BoardConfig) -> DetectionResult:
     parameters = create_detector_parameters()
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
 
+    # OpenCV 5 moved the procedural ArUco functions onto detector classes.
+    if not hasattr(cv2.aruco, "detectMarkers") and hasattr(
+        cv2.aruco,
+        "CharucoDetector",
+    ):
+        detector = cv2.aruco.CharucoDetector(board)
+        charuco_corners, charuco_ids, marker_corners, marker_ids = (
+            detector.detectBoard(gray)
+        )
+        if charuco_ids is None or len(charuco_ids) == 0:
+            charuco_corners, charuco_ids = None, None
+        else:
+            charuco_corners = np.asarray(charuco_corners, dtype=np.float32).reshape(
+                -1,
+                1,
+                2,
+            )
+            charuco_ids = np.asarray(charuco_ids, dtype=np.int32).reshape(-1, 1)
+        if marker_ids is not None:
+            marker_ids = np.asarray(marker_ids, dtype=np.int32).reshape(-1, 1)
+        return DetectionResult(
+            marker_corners,
+            marker_ids,
+            charuco_corners,
+            charuco_ids,
+            "charuco",
+        )
+
     marker_corners, marker_ids, rejected = cv2.aruco.detectMarkers(
         gray,
         dictionary,
@@ -125,7 +174,7 @@ def detect_charuco(image: np.ndarray, config: BoardConfig) -> DetectionResult:
     )
 
     if marker_ids is None or len(marker_ids) == 0:
-        return DetectionResult(marker_corners, None, None, None)
+        return DetectionResult(marker_corners, None, None, None, "charuco")
 
     try:
         refined_corners, refined_ids, _, _ = cv2.aruco.refineDetectedMarkers(
@@ -158,11 +207,78 @@ def detect_charuco(image: np.ndarray, config: BoardConfig) -> DetectionResult:
         marker_ids,
         charuco_corners,
         charuco_ids,
+        "charuco",
     )
+
+
+def detect_chessboard(image: np.ndarray, config: BoardConfig) -> DetectionResult:
+    """Detect all inner corners of a traditional black-and-white chessboard."""
+
+    config.validate()
+    if image is None or image.size == 0:
+        raise ValueError("输入图像为空。")
+
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
+    pattern_size = (config.squares_horizontal, config.squares_vertical)
+    flags = cv2.CALIB_CB_NORMALIZE_IMAGE
+    if hasattr(cv2, "CALIB_CB_EXHAUSTIVE"):
+        flags |= cv2.CALIB_CB_EXHAUSTIVE
+    if hasattr(cv2, "CALIB_CB_ACCURACY"):
+        flags |= cv2.CALIB_CB_ACCURACY
+    found, corners = cv2.findChessboardCornersSB(gray, pattern_size, flags=flags)
+    if not found or corners is None:
+        return DetectionResult([], None, None, None, "chessboard", pattern_size)
+
+    corners = np.asarray(corners, dtype=np.float32).reshape(-1, 1, 2)
+    ids = np.arange(len(corners), dtype=np.int32).reshape(-1, 1)
+    return DetectionResult(
+        [],
+        None,
+        corners,
+        ids,
+        "chessboard",
+        pattern_size,
+    )
+
+
+def detect_calibration_board(
+    image: np.ndarray,
+    config: BoardConfig,
+) -> DetectionResult:
+    """Detect the board type selected in ``config``."""
+
+    if config.pattern_type == "chessboard":
+        return detect_chessboard(image, config)
+    return detect_charuco(image, config)
+
+
+def create_chessboard_object_points(config: BoardConfig) -> np.ndarray:
+    """Return row-major 3-D points for chessboard inner corners."""
+
+    config.validate()
+    points = np.zeros(
+        (config.squares_horizontal * config.squares_vertical, 3),
+        dtype=np.float64,
+    )
+    points[:, :2] = np.mgrid[
+        0 : config.squares_horizontal,
+        0 : config.squares_vertical,
+    ].T.reshape(-1, 2)
+    points *= config.square_length
+    return points
 
 
 def draw_detection(image: np.ndarray, detection: DetectionResult) -> np.ndarray:
     annotated = image.copy()
+    if detection.pattern_type == "chessboard":
+        if detection.corners is not None and detection.pattern_size is not None:
+            cv2.drawChessboardCorners(
+                annotated,
+                detection.pattern_size,
+                detection.corners,
+                True,
+            )
+        return annotated
     if detection.marker_ids is not None:
         cv2.aruco.drawDetectedMarkers(
             annotated,
@@ -191,7 +307,7 @@ def _save_detection_image(
     annotated = draw_detection(image, detection)
     summary = (
         f"{status}  markers={detection.marker_count}  "
-        f"charuco_corners={detection.corner_count}"
+        f"corners={detection.corner_count}"
     )
     if details:
         summary += f"  {details}"
@@ -292,7 +408,7 @@ def _collect_observations(
             )
             continue
 
-        detection = detect_charuco(image, config)
+        detection = detect_calibration_board(image, config)
         accepted = detection.corner_count >= MIN_CORNERS_PER_IMAGE
 
         if detected_images_dir is not None:
@@ -314,8 +430,8 @@ def _collect_observations(
             )
             continue
 
-        all_corners.append(np.asarray(detection.charuco_corners, dtype=np.float32))
-        all_ids.append(np.asarray(detection.charuco_ids, dtype=np.int32))
+        all_corners.append(np.asarray(detection.corners, dtype=np.float32))
+        all_ids.append(np.asarray(detection.ids, dtype=np.int32))
         used_images.append(image_path.name)
 
     if image_size is None:
@@ -384,13 +500,24 @@ def _calibrate_observations(
     image_points: Sequence[np.ndarray],
     board,
     image_size: Tuple[int, int],
+    pattern_type: str,
 ):
     """Run one camera-calibration pass for the selected observations."""
 
     if model == "fisheye":
         camera_matrix = np.zeros((3, 3), dtype=np.float64)
         distortion = np.zeros((4, 1), dtype=np.float64)
-        flags = cv2.fisheye.CALIB_RECOMPUTE_EXTRINSIC | cv2.fisheye.CALIB_FIX_SKEW
+        recompute_flag = getattr(
+            cv2.fisheye,
+            "CALIB_RECOMPUTE_EXTRINSIC",
+            getattr(cv2, "CALIB_RECOMPUTE_EXTRINSIC", 0),
+        )
+        fix_skew_flag = getattr(
+            cv2.fisheye,
+            "CALIB_FIX_SKEW",
+            getattr(cv2, "CALIB_FIX_SKEW", 0),
+        )
+        flags = recompute_flag | fix_skew_flag
         criteria = (
             cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_MAX_ITER,
             100,
@@ -406,10 +533,21 @@ def _calibrate_observations(
             criteria=criteria,
         )
 
-    return cv2.aruco.calibrateCameraCharuco(
-        corners,
-        ids,
-        board,
+    if pattern_type == "charuco" and hasattr(
+        cv2.aruco,
+        "calibrateCameraCharuco",
+    ):
+        return cv2.aruco.calibrateCameraCharuco(
+            corners,
+            ids,
+            board,
+            image_size,
+            None,
+            None,
+        )
+    return cv2.calibrateCamera(
+        [np.asarray(points, dtype=np.float32) for points in object_points],
+        [np.asarray(points, dtype=np.float32) for points in image_points],
         image_size,
         None,
         None,
@@ -445,7 +583,7 @@ def _rewrite_final_detection_images(
         image = cv2.imread(str(image_path))
         if image is None:
             continue
-        detection = detect_charuco(image, config)
+        detection = detect_calibration_board(image, config)
         if image_path.name in outlier_errors:
             status = "OUTLIER"
             details = f"error={outlier_errors[image_path.name]:.5f}"
@@ -525,8 +663,12 @@ def calibrate_from_directory(
         progress,
         detected_images_dir,
     )
-    board = create_charuco_board(config)
-    board_corners = get_board_corners(board)
+    if config.pattern_type == "charuco":
+        board = create_charuco_board(config)
+        board_corners = get_board_corners(board)
+    else:
+        board = None
+        board_corners = create_chessboard_object_points(config)
 
     object_points = [
         board_corners[image_ids.reshape(-1)]
@@ -550,6 +692,7 @@ def calibrate_from_directory(
         image_points,
         board,
         image_size,
+        config.pattern_type,
     )
     initial_mean_error, initial_per_view_errors = _mean_reprojection_error(
         model,
@@ -634,6 +777,7 @@ def calibrate_from_directory(
             image_points,
             board,
             image_size,
+            config.pattern_type,
         )
 
     mean_error, per_view_errors = _mean_reprojection_error(
@@ -962,9 +1106,13 @@ def format_calibration_result(result: Dict[str, object]) -> str:
     distortion = np.asarray(result["D"], dtype=np.float64).reshape(-1)
     model_name = "鱼眼（OpenCV Fisheye）" if result.get("model") == "fisheye" else "针孔（OpenCV）"
     image_size = result.get("image_size", ["?", "?"])
+    board = result.get("board") or {}
+    pattern_type = str(board.get("pattern_type", "charuco"))
+    pattern_name = "传统黑白棋盘格" if pattern_type == "chessboard" else "ChArUco"
 
     lines = [
         f"模型：{model_name}",
+        f"标定板：{pattern_name}",
         f"图像分辨率：{image_size[0]} × {image_size[1]}",
         f"有效标定图片：{result.get('images_used', '?')} 张",
         f"自动剔除异常图片：{len(result.get('outlier_images', []))} 张",
