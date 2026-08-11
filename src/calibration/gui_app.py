@@ -293,10 +293,14 @@ class CalibrationWindow(QMainWindow):
             ("640 × 480", (640, 480)),
         ):
             self.resolution_combo.addItem(text, size)
+        self.resolution_combo.setCurrentIndex(
+            self.resolution_combo.findData((640, 480))
+        )
 
         self.fps_combo = QComboBox()
         for fps in (60, 30, 20, 10, 5):
             self.fps_combo.addItem(str(fps), fps)
+        self.fps_combo.setCurrentIndex(self.fps_combo.findData(30))
 
         self.model_combo = QComboBox()
         self.model_combo.addItem("鱼眼模型（推荐）", "fisheye")
