@@ -103,7 +103,8 @@ pip install -e . -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 项目提供了一个可视化桌面应用，支持：
 
-- 打开 `/dev/video0` USB 鱼眼相机并显示原始实时画面。
+- 在 Windows 上按相机索引和 DirectShow 设备名称识别 USB/UVC 相机，在 Linux
+  上识别 `/dev/video*`，并显示原始实时画面。
 - 可选择 ChArUco 或传统黑白棋盘格，从实时画面拍摄标定照片，并在保存前自动检查角点。
 - 使用鱼眼模型或针孔模型计算相机内参矩阵 `K`、畸变系数 `D`、RMS 重投影误差、每张图片的误差和 COLMAP 参数。
 - 加载已有标定参数。
@@ -121,6 +122,10 @@ pip install -e . -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```bash
 python -m pip install PySide6-Essentials==6.7.2
 ```
+
+Windows 会额外安装 `pygrabber`，用于读取 DirectShow 相机名称。使用
+`pip install -e .` 或 `pip install -r requirements.txt` 时会根据操作系统自动安装，
+无需在 Linux 上安装该依赖。
 
 ### 启动界面
 
@@ -141,7 +146,10 @@ python scripts/calibration_gui.py
 - 参数文件名为 `fisheye_chessboard_calibration.json` 或 `pinhole_chessboard_calibration.json`，不会覆盖原有 ChArUco 参数。
 - 传统棋盘格检测要求完整内角点区域可见；拍摄时尤其要避免裁掉边缘、模糊和强反光。
 
-1. 在“相机设备”中选择 `/dev/video0`。如果重新插拔后设备编号发生变化，点击“刷新设备”。
+1. 在“相机设备”中选择相机。Windows 会显示类似
+   `1: USB Camera` 的“索引: DirectShow 名称”；Linux 会显示
+   `/dev/video0`。如果重新插拔后设备编号发生变化，点击“刷新设备”。未自动列出时，
+   Windows 可手动输入数字索引（例如 `0`），Linux 可手动输入设备路径。
 2. 选择 `1920 × 1080` 和 `60 FPS`。程序会优先使用 USB 相机支持的 MJPG 格式。
 3. 确认界面中的标定板参数为：
 
@@ -188,6 +196,15 @@ python scripts/calibration_gui.py
     original_vs_corrected_0.50.jpg        # 原图和去畸变结果并排对比
     balance_comparison.jpg                # 各 balance 在完整去畸变图上的 ROI
     cropped_balance_comparison.jpg        # 各 balance 实际裁剪结果；仅此图会统一缩放展示
+
+### Windows 相机兼容与排障
+
+- Windows 默认优先使用 DirectShow 打开相机；如果失败，程序会依次回退到
+  Media Foundation 和 OpenCV 自动后端。运行日志会显示最终使用的后端和相机实际输出格式。
+- 在 Windows“设置 → 隐私和安全性 → 相机”中开启相机访问权限，并允许桌面应用访问相机。
+- 浏览器、会议软件和系统“相机”应用可能独占 USB 相机。出现“无法打开相机”时，先关闭这些程序，再点击“刷新设备”。
+- 某些相机不支持所选分辨率、帧率或 MJPG。应用会显示驱动最终采用的实际格式；如画面读取失败，请先尝试 `640 × 480` 和 `30 FPS`。
+- 同名相机可通过前面的数字索引区分。重新插拔或更换 USB 端口后，Windows 可能重新排列索引，请再次刷新并按名称选择。
     metadata.json                         # 分辨率、模型、参数路径等信息
     ```
 
