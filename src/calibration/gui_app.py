@@ -36,6 +36,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .camera_devices import (
+    CameraSource,
+    fourcc_name,
+    list_camera_devices,
+    normalize_camera_source,
+    open_camera_capture,
+)
 from .workflow import (
     BoardConfig,
     MIN_CORNERS_PER_IMAGE,
@@ -51,6 +58,7 @@ from .workflow import (
     load_calibration,
 )
 
+
 class CameraThread(QThread):
     frame_ready = Signal(object)
     camera_opened = Signal(str)
@@ -59,7 +67,8 @@ class CameraThread(QThread):
 
     def __init__(
         self,
-        device: str,
+        device: CameraSource,
+        device_label: str,
         width: int,
         height: int,
         fps: int,
@@ -67,6 +76,7 @@ class CameraThread(QThread):
     ) -> None:
         super().__init__(parent)
         self.device = device
+        self.device_label = device_label
         self.width = width
         self.height = height
         self.fps = fps
@@ -76,9 +86,13 @@ class CameraThread(QThread):
         self._running = False
 
     def run(self) -> None:
-        capture = cv2.VideoCapture(self.device, cv2.CAP_V4L2)
-        if not capture.isOpened():
-            self.camera_error.emit(f"无法打开相机：{self.device}")
+        capture, backend_name, attempted = open_camera_capture(self.device)
+        if capture is None:
+            backends = "、".join(attempted)
+            self.camera_error.emit(
+                f"无法打开相机：{self.device_label}（已尝试 {backends}）。"
+                "请关闭占用相机的其他程序并检查系统相机权限。"
+            )
             return
 
         capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
@@ -90,9 +104,10 @@ class CameraThread(QThread):
         actual_width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
         actual_height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
         actual_fps = capture.get(cv2.CAP_PROP_FPS)
+        actual_fourcc = fourcc_name(capture.get(cv2.CAP_PROP_FOURCC)) or "未知"
         self.camera_opened.emit(
-            f"已打开 {self.device}，实际格式：{actual_width}×{actual_height} @ "
-            f"{actual_fps:.1f} FPS，MJPG"
+            f"已打开 {self.device_label}（{backend_name}），实际格式："
+            f"{actual_width}×{actual_height} @ {actual_fps:.1f} FPS，{actual_fourcc}"
         )
 
         self._running = True
@@ -596,25 +611,34 @@ class CalibrationWindow(QMainWindow):
 
     @Slot()
     def refresh_devices(self) -> None:
-        current = self.device_combo.currentText().strip() or "/dev/video0"
-        devices = sorted(
-            Path("/dev").glob("video*"),
-            key=lambda path: int(path.name.removeprefix("video"))
-            if path.name.removeprefix("video").isdigit()
-            else 9999,
-        )
-        device_names = [str(path) for path in devices]
-        if "/dev/video0" not in device_names:
-            device_names.insert(0, "/dev/video0")
+        current_text = self.device_combo.currentText().strip()
+        current_source = normalize_camera_source(current_text) if current_text else None
+        devices = list_camera_devices()
 
         self.device_combo.blockSignals(True)
         self.device_combo.clear()
-        self.device_combo.addItems(device_names)
-        self.device_combo.setCurrentText(
-            current if current in device_names else "/dev/video0"
+        for device in devices:
+            self.device_combo.addItem(device.label, device.source)
+
+        selected_index = next(
+            (
+                index
+                for index, device in enumerate(devices)
+                if device.source == current_source
+            ),
+            0 if devices else -1,
         )
+        self.device_combo.setCurrentIndex(selected_index)
+        if not devices:
+            fallback = "0" if sys.platform == "win32" else "/dev/video0"
+            self.device_combo.setEditText(current_text or fallback)
         self.device_combo.blockSignals(False)
-        self.append_log("已刷新视频设备：" + ", ".join(device_names))
+        if devices:
+            self.append_log(
+                "已刷新视频设备：" + ", ".join(device.label for device in devices)
+            )
+        else:
+            self.append_log("未自动检测到视频设备；可手动输入相机索引或设备路径。")
 
     def refresh_image_count(self) -> None:
         image_dir = self.calibration_images_dir()
@@ -650,10 +674,25 @@ class CalibrationWindow(QMainWindow):
         if self.camera_thread and self.camera_thread.isRunning():
             return
 
-        device = self.device_combo.currentText().strip()
+        device_label = self.device_combo.currentText().strip()
+        selected_index = self.device_combo.currentIndex()
+        if (
+            selected_index >= 0
+            and device_label == self.device_combo.itemText(selected_index)
+        ):
+            device = self.device_combo.itemData(selected_index)
+        else:
+            device = normalize_camera_source(device_label)
         width, height = self.resolution_combo.currentData()
         fps = int(self.fps_combo.currentData())
-        self.camera_thread = CameraThread(device, width, height, fps, self)
+        self.camera_thread = CameraThread(
+            device,
+            device_label or str(device),
+            width,
+            height,
+            fps,
+            self,
+        )
         self.camera_thread.frame_ready.connect(self.on_frame)
         self.camera_thread.camera_opened.connect(self.on_camera_opened)
         self.camera_thread.camera_error.connect(self.on_camera_error)
@@ -664,7 +703,7 @@ class CalibrationWindow(QMainWindow):
         self.close_camera_button.setEnabled(True)
         self.capture_button.setEnabled(True)
         self.set_camera_settings_enabled(False)
-        self.set_status(f"正在打开相机 {device}……")
+        self.set_status(f"正在打开相机 {device_label or device}……")
 
     @Slot()
     def close_camera(self) -> None:

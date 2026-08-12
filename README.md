@@ -29,6 +29,36 @@ pip install -e .
 ```
 All dependencies will now be installed and the modules can be installed in any python file in this venv.
 
+## Camera GUI on Windows and Linux
+
+Start the desktop calibration application from the repository root:
+
+```bash
+python scripts/calibration_gui.py
+```
+
+On Windows, the camera selector lists devices as `index: DirectShow name`
+(for example, `1: USB Camera`). The application opens the selected index with
+DirectShow first, then falls back to Media Foundation and OpenCV's automatic
+backend. On Linux, it lists `/dev/video*` devices and prefers V4L2. The selector
+remains editable, so a Windows camera index or Linux device path can also be
+entered manually.
+
+The Windows-only `pygrabber` dependency used for friendly DirectShow device
+names is installed automatically by `pip install -e .` or
+`pip install -r requirements.txt`.
+
+If Windows lists a camera but cannot open it:
+
+1. Enable camera access and desktop-app camera access in Windows Settings under
+   **Privacy & security > Camera**.
+2. Close browsers, meeting clients, and the Windows Camera application, because
+   another process may be using the device exclusively.
+3. Refresh the device list after reconnecting the USB camera. Windows may assign
+   a different index after moving it to another USB port.
+4. Try `640 x 480` at `30 FPS` if the camera driver does not support the selected
+   resolution, frame rate, or MJPG format.
+
 
 ### Structure
 The Project is split up into the following folders, to get started place your calibration images into data/calibration/images and your images you wish to undistort into data/raw_images. All other folders will have information generated into.
