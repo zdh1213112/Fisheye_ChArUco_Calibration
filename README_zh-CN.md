@@ -1,533 +1,479 @@
-# 鱼眼相机 ChArUco / 传统棋盘格标定
+# 鱼眼相机 ChArUco / 棋盘格标定工具
 
-### 项目概述
+[English README](README.md)
 
-本项目支持通过 ChArUco 或传统黑白棋盘格标定相机。它结合 OpenCV 中的标定与 `cv.fisheye` 模块，可用于鱼眼相机标定，同时也支持针孔相机。
+本项目提供 Windows 和 Linux 通用的相机标定桌面应用，支持 USB/UVC 相机、ChArUco 与传统棋盘格、鱼眼与针孔模型、实时去畸变、标定批次归档和批量图片矫正。
 
-![](docs/README_images/detected_markers.png)
+![ChArUco 检测示例](docs/README_images/detected_markers.png)
 
-### 快速开始
+## 目录
 
-当前依赖版本已适配并固定为 OpenCV Contrib `4.12.0.88` 和 NumPy
-`2.2.6`。由于 NumPy 2.2 要求 Python 3.10 或更高版本，请使用
-Python 3.10+ 创建运行环境。
+- [主要功能](#主要功能)
+- [系统要求](#系统要求)
+- [安装环境](#安装环境)
+- [快速启动](#快速启动)
+- [Windows 与 Linux 相机兼容](#windows-与-linux-相机兼容)
+- [GUI 标定流程](#gui-标定流程)
+- [数据和输出目录](#数据和输出目录)
+- [批量图片矫正](#批量图片矫正)
+- [Python API](#python-api)
+- [标定质量建议](#标定质量建议)
+- [旧版数据迁移](#旧版数据迁移)
+- [常见问题](#常见问题)
+- [开发与测试](#开发与测试)
 
-由于项目依赖特定版本的 OpenCV 及其他库，强烈建议使用虚拟环境运行本项目。可以使用以下命令创建并激活虚拟环境：
+## 主要功能
 
-```
-python -m venv myenv
-source myenv/bin/activate  # macOS/Linux
-myenv\Scripts\activate     # Windows
+- 在 Windows 上读取 DirectShow 相机名称和数字索引，在 Linux 上枚举 `/dev/video*` 并读取 V4L2 设备名称。
+- Windows 按 DirectShow、Media Foundation、OpenCV 自动后端依次回退；Linux 按 V4L2、OpenCV 自动后端回退。
+- 支持 ChArUco 和传统黑白棋盘格。
+- 支持 OpenCV 鱼眼模型和针孔模型。
+- 从实时画面拍摄标定照片，并在保存前检查角点数量。
+- 按实际分辨率隔离照片、标定参数和检测结果，避免混用不同分辨率的数据。
+- 自动保存每张标定图的角点检测结果，并根据单图重投影误差剔除明显离群图。
+- 同时显示原始画面和实时去畸变画面。
+- 使用 `balance` 调整视场范围，使用“边缘压缩”控制外围投影。
+- 保存原图、矫正图、ROI、并排对比图和多组 `balance` 对比图。
+- 将当前标定照片和已有参数归档后创建新的空批次。
+- 使用命令行批量矫正已有图片。
 
-python -m pip install --upgrade pip  # 推荐执行，但不是必需的
-```
+## 系统要求
 
-只需输入以下命令即可退出虚拟环境：
+| 项目 | 要求 |
+| --- | --- |
+| 操作系统 | Windows 10/11，或带 V4L2 的主流 Linux 发行版 |
+| Python | 3.10、3.11 或 3.12；推荐 3.10 |
+| 相机 | OpenCV 可访问的 USB/UVC 相机或系统视频设备 |
+| OpenCV | `opencv-contrib-python==4.12.0.88` |
+| NumPy | `numpy==2.2.6` |
+| GUI | `PySide6-Essentials==6.7.2` |
 
-```
-deactivate
-```
+项目应在仓库根目录执行命令。路径中尽量避免特殊字符，并确保当前用户对 `data/` 目录具有写权限。
 
-接下来安装并运行本项目：
+## 安装环境
 
-```
-pip install setuptools
-pip install -e . -i https://pypi.tuna.tsinghua.edu.cn/simple
-```
+### 方式一：Miniforge（推荐）
 
-执行后将安装所有依赖项，并且可以在该虚拟环境中的任意 Python 文件里导入项目模块。
+Miniforge 能在 Windows 和 Linux 上统一 Python 版本与环境管理，适合开发、测试和现场部署。当前 Miniforge 已同时提供 `conda` 和 `mamba`；不需要另外安装已经弃用的 Mambaforge。`mamba` 使用并行下载和更快的依赖求解，推荐优先使用。
 
-### 项目结构
-
-仓库中包含以下源码目录：
-
-```
-├── docs
-│   └── README_images
-├── scripts
-│   └── calibration_gui.py
-├── src
-│   ├── calibration             # 标定算法、GUI 和实时矫正工作流
-│   └── virtual_camera
-└── tests
-```
-
-项目脚本还会使用根目录下的 `data/` 作为运行时数据目录。该目录已被 `.gitignore` 忽略，因此克隆仓库后默认不存在。首次使用前，会自动在项目根目录创建文件夹；
-
-
-创建后的运行时数据目录结构如下：
-
-```
-├── data
-│   ├── calibration
-│   │   ├── camera_intrinsics      # 按分辨率保存相机标定参数
-│   │   │   ├── 640x480
-│   │   │   └── 1920x1080
-│   │   ├── images                 # 按分辨率保存 ChArUco 标定照片
-│   │   │   ├── 640x480
-│   │   │   └── 1920x1080
-│   │   └── detected_images        # 每次标定保存带检测标记的识别图
-│   │       └── 1920x1080
-│   ├── raw_images
-│   │   └── descent_1              # 手动放入：需要去畸变的原始照片
-│   ├── realtime_captures          # GUI 保存的实时原图和矫正对比图
-│   │   └── 1920x1080
-│   ├── undistorted_images         # 程序输出：去畸变后的图像
-│   │   ├── fisheye
-│   │   └── pinhole
-│   └── virtual_cameras            # 程序输出：虚拟相机分割图像
-├── docs
-│   └── README_images
-├── scripts
-├── src
-│   ├── calibration
-│   └── virtual_camera
-└── tests
-```
-
-需要手动放入图像的目录只有以下两个：
-
-- `data/calibration/images/<宽>x<高>/`：放置对应分辨率下拍摄的 ChArUco 标定板照片，用于计算该分辨率的相机内参和畸变参数。GUI 会自动创建和选择该目录。
-- `data/raw_images/descent_1/`：放置需要进行去畸变处理的原始照片。当前的 `run_calibration.py` 和 `undistort_images.py` 默认读取该子目录；如果使用其他目录，需要同时修改脚本中的 `raw_images_dir`。
-
-其余目录用于保存程序输出：
-
-- `data/calibration/camera_intrinsics/<宽>x<高>/`：保存对应分辨率的鱼眼或针孔相机标定参数文件。
-- `data/calibration/detected_images/<宽>x<高>/<时间戳_模型>/`：每次点击“开始计算标定参数”时，保存所有标定照片的检测识别结果。图中会标出 ArUco 边框和 ID、ChArUco 角点，并在左上角显示该图是否参与标定以及检测数量。
-- `data/realtime_captures/<宽>x<高>/`：保存 GUI 捕获的原图、当前 balance 矫正图和多 balance 对比图。
-- `data/undistorted_images/fisheye/`：保存使用鱼眼模型去畸变后的图像。
-- `data/undistorted_images/pinhole/`：保存使用针孔模型去畸变后的图像。
-- `data/virtual_cameras/`：保存虚拟相机分割生成的图像。
-
-## PySide6 相机标定与实时矫正界面
-
-项目提供了一个可视化桌面应用，支持：
-
-- 在 Windows 上按相机索引和 DirectShow 设备名称识别 USB/UVC 相机，在 Linux
-  上识别 `/dev/video*`，并显示原始实时画面。
-- 可选择 ChArUco 或传统黑白棋盘格，从实时画面拍摄标定照片，并在保存前自动检查角点。
-- 可通过“归档并新建批次”把当前照片安全归档后开始一组全新的标定数据，避免同分辨率照片持续累加。
-- 使用鱼眼模型或针孔模型计算相机内参矩阵 `K`、畸变系数 `D`、RMS 重投影误差、每张图片的误差和 COLMAP 参数。
-- 加载已有标定参数。
-- 同时显示原始实时画面和去畸变后的实时画面。
-- 使用 `balance` 参数调整矫正后的视场范围。
-- 按相机实际分辨率自动隔离标定照片和 JSON 参数，避免混用不同分辨率。
-- 计算标定参数时自动保存每张标定照片的 ArUco/ChArUco 检测识别图，方便检查漏检和坏图。
-- 第一遍标定后根据每张图片的重投影误差自动识别离群图，剔除后再进行第二遍标定。
-- 一键保存原图、当前矫正图、并排对比图以及多个 balance 的 2×2 对比图。
-
-### 安装 GUI 依赖
-
-执行前文的 `pip install -e .` 会同时安装 GUI 所需的 PySide6 Essentials。如果之前已经安装过本项目，请补充执行：
+1. 从 [Miniforge 官方仓库](https://github.com/conda-forge/miniforge) 安装对应系统版本。
+2. Windows 打开 “Miniforge Prompt”，Linux 打开终端。
+3. 进入项目根目录并执行：
 
 ```bash
-python -m pip install PySide6-Essentials==6.7.2
+mamba env create -f environment.yml
+conda activate fisheye-charuco
 ```
 
-Windows 会额外安装 `pygrabber`，用于读取 DirectShow 相机名称。使用
-`pip install -e .` 或 `pip install -r requirements.txt` 时会根据操作系统自动安装，
-无需在 Linux 上安装该依赖。
+如果终端中没有 `mamba` 命令，可使用兼容的 Conda 命令：
 
-### 启动界面
+```bash
+conda env create -f environment.yml
+conda activate fisheye-charuco
+```
 
-在项目根目录执行：
+`environment.yml` 会创建 Python 3.10 环境，并以 editable 模式安装当前项目。`requirements.txt` 中的平台条件会自动生效：
+
+- Windows 安装 `pygrabber`，用于读取 DirectShow 设备名称。
+- Linux 不安装 `pygrabber`。
+- Windows 自动跳过 `pexpect`、`ptyprocess` 等 POSIX 专用依赖。
+
+`mamba` 主要加速 Conda 的仓库访问、包下载和依赖求解。本项目随后会通过 pip 安装 OpenCV、PySide6 等 Python 包，因此整体速度仍会受到 PyPI 网络质量影响。
+
+中国大陆网络可在创建环境前临时设置 pip 镜像。Windows PowerShell：
+
+```powershell
+$env:PIP_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple"
+mamba env create -f environment.yml
+```
+
+Linux：
+
+```bash
+PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \
+mamba env create -f environment.yml
+```
+
+镜像不可用或包版本不同步时，移除 `PIP_INDEX_URL` 后重新使用官方 PyPI。
+
+不激活环境也可以直接启动：
+
+```bash
+conda run -n fisheye-charuco python scripts/calibration_gui.py
+```
+
+更新已有环境：
+
+```bash
+mamba env update -n fisheye-charuco -f environment.yml --prune
+```
+
+删除环境：
+
+```bash
+conda env remove -n fisheye-charuco
+```
+
+### 方式二：Python venv
+
+不希望安装 Conda 时，可以使用系统 Python 创建虚拟环境。
+
+Windows PowerShell：
+
+```powershell
+py -3.10 -m venv myenv
+myenv\Scripts\Activate.ps1
+python -m pip install --upgrade pip setuptools
+python -m pip install -e .
+```
+
+如果 PowerShell 禁止执行激活脚本，可在命令提示符中运行：
+
+```bat
+myenv\Scripts\activate.bat
+```
+
+Linux：
+
+```bash
+python3 -m venv myenv
+source myenv/bin/activate
+python -m pip install --upgrade pip setuptools
+python -m pip install -e .
+```
+
+安装开发依赖：
+
+```bash
+python -m pip install -e ".[dev]"
+```
+
+### 验证环境
+
+```bash
+python -c "import cv2, numpy, PySide6; print(cv2.__version__, numpy.__version__)"
+```
+
+正常情况下会输出 OpenCV 和 NumPy 版本，不会出现模块导入错误。
+
+## 快速启动
+
+激活环境后，在项目根目录执行：
 
 ```bash
 python scripts/calibration_gui.py
 ```
 
-### GUI 使用流程
+首次启动时，程序会自动创建需要的 `data/calibration/` 和 `data/realtime_captures/` 子目录。
 
-标定板类型默认是 `ChArUco（推荐）`。如果使用传统黑白棋盘格，请在“标定板类型”中选择“传统黑白棋盘格”。此时：
+GUI 默认设置：
 
-- “横向/纵向”填写的是**内角点数量**，不是黑白方格数量。例如 `14 × 9` 个方格应填写横向 `13`、纵向 `8`。
-- “方格边长”填写相邻内角点之间的实际距离；单位与标定结果中的平移单位一致。
-- ArUco 字典、标记边长和旧版布局选项会自动禁用。
-- 传统棋盘格拍摄目录为 `data/calibration/images/<宽>x<高>/chessboard/`，不会与已有 ChArUco 照片混用。
-- 参数文件名为 `fisheye_chessboard_calibration.json` 或 `pinhole_chessboard_calibration.json`，不会覆盖原有 ChArUco 参数。
-- 传统棋盘格检测要求完整内角点区域可见；拍摄时尤其要避免裁掉边缘、模糊和强反光。
+| 设置 | 默认值 |
+| --- | --- |
+| 分辨率 | `640 × 480` |
+| 帧率 | `30 FPS` |
+| 相机模型 | 鱼眼模型 |
+| 标定板 | ChArUco |
+| ArUco 字典 | `DICT_5X5_100` |
+| 方格数量 | 横向 X=`14`，纵向 Y=`9` |
+| 方格边长 | `20 mm` |
+| 标记边长 | `15 mm` |
+| balance | `0.00` |
+| 边缘压缩 | `0.00` |
 
-如果要在相同分辨率下重新拍摄一套干净数据，先点击“归档并新建批次”。程序会把当前标定照片移动到：
+## Windows 与 Linux 相机兼容
+
+| 系统 | 设备发现 | 打开后端顺序 | 手动输入示例 |
+| --- | --- | --- | --- |
+| Windows | 优先读取 DirectShow 名称；失败时探测数字索引 | DirectShow → Media Foundation → OpenCV 自动 | `0`、`1` |
+| Linux | 枚举 `/dev/video*`，并尽量读取 `/sys/class/video4linux` 中的名称 | V4L2 → OpenCV 自动 | `/dev/video0` |
+
+设备下拉框可以编辑。Windows 通常显示 `1: USB Camera`；Linux 通常显示 `/dev/video0: USB Camera`，读取不到名称时只显示设备路径。
+
+打开成功后，运行日志会显示实际使用的后端、分辨率、帧率和 FOURCC 视频格式。驱动可能不会接受请求的全部参数，应以日志中的实际格式为准。
+
+## GUI 标定流程
+
+### 1. 选择相机格式
+
+1. 点击“刷新设备”并选择目标相机。
+2. 选择分辨率和帧率。
+3. 点击“打开相机”。
+4. 确认日志中的实际分辨率和帧率符合预期。
+
+正式标定建议使用相机稳定支持的最高实用分辨率。若 `1920 × 1080 @ 60 FPS` 无法工作，先测试 `640 × 480 @ 30 FPS`。
+
+### 2. 设置标定板
+
+| 标定板 | 横向/纵向含义 | 其他参数 |
+| --- | --- | --- |
+| ChArUco | 方格数量 | ArUco 字典、方格边长、标记边长 |
+| 传统棋盘格 | 内角点数量，不是黑白方格数量 | 方格边长 |
+
+默认 ChArUco 板参数为横向 X=`14`、纵向 Y=`9`、方格边长 `20 mm`、标记边长 `15 mm`。标定板旋转摆放不会改变 X/Y 配置。
+
+对于 `14 × 9` 个黑白方格的传统棋盘格，应填写 `13 × 8` 个内角点。
+
+### 3. 拍摄照片
+
+1. 点击“拍摄标定照片”或按空格键。
+2. 程序会检测标定板；角点不足时不会保存。
+3. 建议拍摄 15～25 张照片，覆盖画面中心、四角和边缘。
+4. 同时包含正视、倾斜、旋转、远近不同的姿态。
+
+照片按实际分辨率保存：
+
+```text
+data/calibration/images/<宽>x<高>/                 # ChArUco
+data/calibration/images/<宽>x<高>/chessboard/      # 传统棋盘格
+```
+
+### 4. 计算参数
+
+1. 选择“鱼眼模型”或“针孔模型”。
+2. 点击“开始计算标定参数”。
+3. 标定在线程中运行，不会阻塞实时画面。
+4. 完成后 GUI 显示内参矩阵 `K`、畸变系数 `D`、RMS、单图误差和 COLMAP 参数。
+
+参数文件示例：
+
+```text
+data/calibration/camera_intrinsics/1920x1080/fisheye_calibration.json
+data/calibration/camera_intrinsics/1920x1080/pinhole_calibration.json
+data/calibration/camera_intrinsics/1920x1080/fisheye_chessboard_calibration.json
+data/calibration/camera_intrinsics/1920x1080/pinhole_chessboard_calibration.json
+```
+
+每次计算还会生成检测识别图：
+
+```text
+data/calibration/detected_images/1920x1080/<时间戳>_<标定板>_<模型>/
+```
+
+识别图会标记 `USED`、`OUTLIER` 或 `SKIPPED`，便于检查有效图片、离群图片和角点不足图片。
+
+### 5. 实时矫正
+
+点击“开始实时矫正”后，左侧显示原始画面，右侧显示矫正画面。
+
+- `balance=0.00`：使用标定焦距，画面更自然，外围拉伸较小。
+- `balance=1.00`：扩大视场，可能增加黑边和外围拉伸。
+- `边缘压缩=0.00`：标准 OpenCV 投影，直线保持更稳定。
+- 增大边缘压缩：减少外围拉伸，但会改变投影形状，属于实验选项。
+
+建议先保持 `balance=0.00`、`边缘压缩=0.00`，确认标准矫正结果后再调整。
+
+### 6. 保存矫正对比
+
+点击“保存矫正对比”会生成：
+
+```text
+data/realtime_captures/<分辨率>/<时间戳>/
+├── original.jpg
+├── corrected_balance_0.00.jpg
+├── corrected_full.jpg
+├── corrected_full_with_roi_balance_0.00.jpg
+├── original_vs_corrected_0.00.jpg
+├── balance_comparison.jpg
+├── cropped_balance_comparison.jpg
+└── metadata.json
+```
+
+### 7. 归档并新建批次
+
+需要在相同分辨率下重新拍摄一套干净数据时，点击“归档并新建批次”。当前照片会移动到：
 
 ```text
 data/calibration/image_archives/<宽>x<高>/<标定板类型>/<时间戳>/
 ```
 
-当前活动照片目录随后会变为空目录。旧照片不会被删除；已有鱼眼和针孔参数也会复制到该批次的 `camera_intrinsics/` 子目录中备份。
+已有鱼眼和针孔参数会复制到归档目录的 `camera_intrinsics/` 子目录。归档完成后，当前照片目录为空，GUI 会清除已加载的标定与实时矫正状态。归档操作不会删除旧照片；移动失败时会尝试回滚。
 
-1. 在“相机设备”中选择相机。Windows 会显示类似
-   `1: USB Camera` 的“索引: DirectShow 名称”；Linux 会显示
-   `/dev/video0`。如果重新插拔后设备编号发生变化，点击“刷新设备”。未自动列出时，
-   Windows 可手动输入数字索引（例如 `0`），Linux 可手动输入设备路径。
-2. 选择 `1920 × 1080` 和 `60 FPS`。程序会优先使用 USB 相机支持的 MJPG 格式。
-3. 确认界面中的标定板参数为：
-
-   ```text
-   ArUco 字典：DICT_5X5_100
-   纵向方格（Y）：9
-   横向方格（X）：14
-   方格边长：20 mm
-   标记边长：15 mm
-   旧版布局兼容：关闭
-   ```
-
-   注意：虽然这块标定板经常竖着摆放，看起来是“纵向 14、横向 9”，但根据板上 ArUco 标记 ID 的排列，它在厂家/OpenCV 坐标中实际是横向 X=14、纵向 Y=9。旋转标定板不会改变该配置。如果填写成纵向 14、横向 9，会出现能检测到几十个 ArUco 标记、但 ChArUco 角点为 0 的情况。
-
-4. 点击“打开相机”，左侧会显示原始实时画面。
-5. 从不同角度、距离和画面位置拍摄 15～25 张标定照片。点击“拍摄标定照片”或按空格键即可拍照。照片会按实际分辨率自动保存，例如 `data/calibration/images/1920x1080/`；如果检测到的角点太少，程序不会保存该照片。
-6. 选择“鱼眼模型（推荐）”，点击“开始计算标定参数”。计算过程在后台线程执行，不会冻结相机画面。
-7. 计算过程中，程序会把每张照片的检测识别结果保存到本次计算专用目录，例如：
-
-   ```text
-   data/calibration/detected_images/1920x1080/20260731_120000_000_fisheye/
-   ```
-
-   识别图左上角的 `USED` 表示最终参与标定，`OUTLIER` 表示第一遍标定后因单图误差明显偏高而被自动剔除，`SKIPPED` 表示角点不足而被跳过；同时会显示检测数量、单图误差和自动剔除阈值。原始标定照片不会被修改。
-
-   自动剔除采用中位数和 MAD 稳健统计量：至少有 10 张有效图片时才启用，阈值为 `max(中位数 + 3 × 稳健标准差, 中位数 × 2)`，一次最多剔除总图片数的 20%，并始终保留至少 5 张。这可以自动去掉误差特别突出的坏图，同时避免因普通波动误删过多照片。
-8. 标定完成后，界面会显示相机内参、畸变系数、误差和 COLMAP 参数，并保存：
-
-   ```text
-   data/calibration/camera_intrinsics/1920x1080/fisheye_calibration.json
-   ```
-
-9. 点击“开始实时矫正”，右侧会显示实时去畸变画面，左侧继续显示原始画面，便于直接对比。
-10. “边缘压缩”默认值为 `0.00`，即使用标准 OpenCV 鱼眼投影。该参数大于 `0` 时会使用实验性的外围投影压缩，可能改变边缘直线形状；如需自然、稳定的矫正效果，请保持为 `0.00`。
-11. 调整 `balance`：默认值 `0.00` 使用标定得到的原始焦距，与参考项目 `/home/zdh/tool/Fisheye_ChArUco_Calibration` 的投影方式一致，画面更自然、外围拉伸更小。数值增大时会平滑扩展视场，`1.00` 对应旧版项目的 `0.70` 焦距比例，能看到更多外围内容，但拉伸和黑边可能增加。每个 balance 都会单独计算映射和安全 ROI，不再复用同一张宽视场映射。
-12. 点击“保存矫正对比”，程序会在 `data/realtime_captures/<分辨率>/<时间戳>/` 中保存：
-
-    ```text
-    original.jpg                         # 原始实时画面
-    corrected_balance_0.50.jpg           # 当前 balance 的矫正图
-    corrected_full.jpg                   # 标准鱼眼去畸变后的完整画面（含无效黑边）
-    corrected_full_with_roi_balance_0.50.jpg
-                                         # 完整去畸变画面，并用绿框标出当前 ROI
-    original_vs_corrected_0.50.jpg        # 原图和去畸变结果并排对比
-    balance_comparison.jpg                # 各 balance 在完整去畸变图上的 ROI
-    cropped_balance_comparison.jpg        # 各 balance 实际裁剪结果；仅此图会统一缩放展示
-    metadata.json                         # 分辨率、模型、参数路径等信息
-    ```
-
-### Windows 相机兼容与排障
-
-- Windows 默认优先使用 DirectShow 打开相机；如果失败，程序会依次回退到
-  Media Foundation 和 OpenCV 自动后端。运行日志会显示最终使用的后端和相机实际输出格式。
-- 在 Windows“设置 → 隐私和安全性 → 相机”中开启相机访问权限，并允许桌面应用访问相机。
-- 浏览器、会议软件和系统“相机”应用可能独占 USB 相机。出现“无法打开相机”时，先关闭这些程序，再点击“刷新设备”。
-- 某些相机不支持所选分辨率、帧率或 MJPG。应用会显示驱动最终采用的实际格式；如画面读取失败，请先尝试 `640 × 480` 和 `30 FPS`。
-- 同名相机可通过前面的数字索引区分。重新插拔或更换 USB 端口后，Windows 可能重新排列索引，请再次刷新并按名称选择。
-
-程序默认使用 OpenCV 鱼眼模型根据当前分辨率对应的内参矩阵 `K` 和畸变系数 `D` 计算标准去畸变坐标映射。`balance=0` 使用 `Knew=K` 的自然投影；随着 balance 增大，焦距比例从 `1.00` 平滑降低到 `0.70`，逐步增加视场。完整结果保留实际映射产生的有效区域，没有可靠源像素的位置显示为黑色；随后再根据每个投影各自的有效掩膜计算安全 ROI。
-
-实时矫正、`corrected_full.jpg` 和 `corrected_balance_*.jpg` 使用同一套标准映射。这样可以直接观察鱼眼畸变被校正后的真实直线效果，同时通过绿色框查看最终建议裁剪范围。
-
-旧版本直接保存在 `data/calibration/images/` 根目录中的混合分辨率照片，会在新版 GUI 下次启动时根据图片实际尺寸自动移动到对应的分辨率子目录。旧版根目录 JSON 参数也会复制到对应的分辨率参数目录。
-
-如果矫正画面看起来偏软，请确认相机实际工作在 `1920×1080`。`640×480` 画面在 GUI 中被放大显示后会明显变模糊；正式标定和实时矫正均建议使用相同的 `1920×1080` 分辨率。
-
-拍摄标定照片时，应让标定板分别出现在画面中心、四角和边缘，并包含正视、倾斜和旋转姿态。避免只在同一个位置连续拍摄，否则即使照片数量足够，标定结果也可能不准确。
-
-### 命令行操作
-
-以下命令均需在项目根目录执行。
-
-#### 1. 检查标定板参数
-
-打开 `scripts/run_calibration.py` 和 `scripts/undistort_images.py`，确认以下参数与实际拍摄时使用的 ChArUco 标定板一致：
-
-```python
-ARUCO_DICT = cv2.aruco.DICT_5X5_100
-SQUARES_VERTICALLY = 9
-SQUARES_HORIZONTALLY = 14
-SQUARE_LENGTH = 0.020
-MARKER_LENGTH = 0.015
-```
-
-各参数含义如下：
-
-- `ARUCO_DICT`：指定标定板使用的 ArUco 标记字典。`cv2.aruco.DICT_5X5_100` 表示每个标记内部由 `5 × 5` 个二进制格组成，该字典最多提供 100 个不同编号的标记。此参数必须与制作或打印标定板时使用的字典一致。
-- `SQUARES_VERTICALLY`：ChArUco 标定板在厂家/OpenCV 坐标中纵向（Y）的方格数量。当前值为 `9`。
-- `SQUARES_HORIZONTALLY`：ChArUco 标定板在厂家/OpenCV 坐标中横向（X）的方格数量。当前值为 `14`。
-- `SQUARE_LENGTH`：每个棋盘方格的实际边长。当前值为 `0.020` 米，即 `20 毫米`。
-- `MARKER_LENGTH`：每个 ArUco 标记的实际边长。当前值为 `0.015` 米，即 `15 毫米`。
-
-`SQUARE_LENGTH` 和 `MARKER_LENGTH` 必须使用相同的长度单位，并且 `MARKER_LENGTH` 应小于 `SQUARE_LENGTH`。上述五个参数必须与实际拍摄的 ChArUco 标定板完全一致，否则可能无法正确检测角点，或者会得到错误的标定结果。
-
-#### 2. 激活虚拟环境
-
-```bash
-source myenv/bin/activate  # macOS/Linux
-```
-
-Windows：
-
-```powershell
-myenv\Scripts\activate
-```
-
-如果尚未安装项目，请先执行前文“快速开始”中的安装命令。
-
-#### 3. 执行相机标定
-
-```bash
-python scripts/run_calibration.py
-```
-
-该脚本会读取 `data/calibration/images/` 中的 ChArUco 标定板照片，检测标记和角点，然后分别使用鱼眼模型和针孔模型计算相机参数。
-
-执行成功后会生成：
+## 数据和输出目录
 
 ```text
-data/calibration/camera_intrinsics/
-├── fisheye_calibration.json   # 鱼眼相机模型参数
-└── pinhole_calibration.json   # 针孔相机模型参数
+Fisheye_ChArUco_Calibration/
+├── environment.yml
+├── requirements.txt
+├── scripts/
+│   ├── calibration_gui.py
+│   ├── undistort_images.py
+│   ├── run_calibration.py
+│   └── generate_virtual_cameras.py
+├── src/
+│   ├── calibration/
+│   └── virtual_camera/
+├── tests/
+└── data/
+    ├── calibration/
+    │   ├── images/
+    │   ├── image_archives/
+    │   ├── camera_intrinsics/
+    │   └── detected_images/
+    ├── realtime_captures/
+    ├── raw_images/
+    ├── undistorted_images/
+    └── virtual_cameras/
 ```
 
-两个 JSON 文件主要包含：
+同一套参数只适用于对应的分辨率和相机成像模式。切换分辨率、裁剪模式或驱动输出模式后，应重新标定。
 
-- `K`：相机内参矩阵，其中包括焦距 `fx`、`fy` 和主点 `cx`、`cy`。
-- `D`：镜头畸变系数。
+## 批量图片矫正
 
-终端还会显示相机内参矩阵、畸变系数、实际参与标定的照片数量，以及可供 COLMAP 使用的相机参数。对于鱼眼镜头，通常使用 `fisheye_calibration.json`。
+推荐使用 `scripts/undistort_images.py`。查看全部参数：
 
-此步骤只计算并保存相机参数，不会生成去畸变后的图片。
+```bash
+python scripts/undistort_images.py --help
+```
 
-如果终端提示没有检测到 ChArUco 角点，请检查标定板参数是否正确、照片是否清晰，以及标定板是否在图像中占有足够面积。
-
-#### 4. 批量去畸变
-
-标定成功并生成上述 JSON 文件后，执行：
+默认处理 `640x480` 鱼眼标定照片：
 
 ```bash
 python scripts/undistort_images.py
 ```
 
-该脚本默认直接使用当前 `data` 中的 640×480 标定照片进行矫正，并执行以下操作：
-
-1. 读取 `data/calibration/images/640x480/` 中的全部图片。
-2. 加载 `data/calibration/camera_intrinsics/640x480/fisheye_calibration.json`。
-3. 使用与 GUI 相同的自然优化投影进行去畸变。
-4. 保存每张矫正图、原图与矫正图的并排对比，以及本次参数元数据。
-
-```text
-data/undistorted_images/640x480/natural_optimized/
-├── charuco_*.jpg
-├── comparisons/
-│   └── charuco_*.jpg
-└── metadata.json
-```
-
-默认 `balance=0`，效果接近参考项目但保留当前项目的有效区域检查、自动 ROI、三次插值和映射缓存优化。可以通过命令行生成更宽视场：
-
-```bash
-python scripts/undistort_images.py --balance 0.5
-```
-
-也可以处理其他目录：
+处理自定义目录：
 
 ```bash
 python scripts/undistort_images.py \
   --input-dir data/raw_images/descent_1 \
-  --output-dir data/undistorted_images/custom
+  --calibration data/calibration/camera_intrinsics/1920x1080/fisheye_calibration.json \
+  --output-dir data/undistorted_images/1920x1080 \
+  --balance 0.2
 ```
 
-原始图片不会被修改。运行 `python scripts/undistort_images.py --help` 可以查看全部参数。
+Windows PowerShell 可以把续行符 `\` 改为反引号，或将命令写在同一行。
 
-下文进一步介绍了核心类，以帮助理解项目或排查问题。如果没有标定图像，可以使用下面的代码在屏幕上生成标定板，然后拍摄标定图像。
+| 参数 | 说明 |
+| --- | --- |
+| `--input-dir` | 输入图片目录 |
+| `--calibration` | 标定 JSON 文件 |
+| `--output-dir` | 输出目录 |
+| `--balance` | 视场范围，`0～1` |
+| `--edge-compression` | 边缘压缩强度，`0～1` |
+| `--keep-crop-size` | 保持安全 ROI 原始尺寸，不缩放回输入分辨率 |
+| `--no-comparisons` | 不生成原图与矫正图对比 |
 
-## 用于相机标定的 ChArUco 标定板
+输出目录包含矫正图、可选的 `comparisons/` 和记录全部处理参数的 `metadata.json`。
 
-ChArUco 标定板是一种结合棋盘格图案与 ArUco 标记的混合标定图案。与传统标定方法相比，它具有以下优点：
+`scripts/run_calibration.py` 是旧版 API 示例，默认读取 `data/calibration/images/` 根目录，不会递归读取新版的分辨率子目录。日常使用请优先使用 GUI；如需运行该脚本，应先把其中的图片目录改为具体目录，例如 `data/calibration/images/1920x1080/`。
 
-1. 即使存在部分遮挡，也能进行稳定检测
-2. 自动且准确地检测角点
-3. 每个角点都有唯一标识
+## Python API
 
-### 生成 ChArUco 标定板
-
-`CharucoCalibrator` 类提供了生成 ChArUco 标定板的方法：
-
-```python
-calibrator.generate_charuco_board()
-```
-
-![](docs/README_images/ChArUco_Marker.png)
-
-该方法会创建一张 ChArUco 标定板图像，并以 `charuco_board.png` 为文件名保存到 `data/calibration/` 目录中。
-
-### 关键参数
-
-初始化标定器时，以下参数用于定义 ChArUco 标定板：
-
-- `aruco_dict`：使用的 ArUco 字典（例如 `cv2.aruco.DICT_5X5_100`）
-- `squares_vertically`：ChArUco 标定板纵向的方格数量
-- `squares_horizontally`：ChArUco 标定板横向的方格数量
-- `square_length`：ChArUco 标定板中每个方格的实际边长（使用自行选择的单位，例如米）
-- `marker_length`：ChArUco 标定板中每个 ArUco 标记的实际边长（单位应与 `square_length` 相同）
-
-### 拍摄标定照片
-
-为了获得准确的标定结果，拍摄 ChArUco 标定板图像时请遵循以下建议：
-
-1. 将生成的 ChArUco 标定板打印并固定在平整、坚硬的表面上。
-2. 确保光线充足且均匀，避免阴影或反光。
-3. 从不同角度和距离拍摄 10～20 张标定板图像。
-4. 拍摄的图像应覆盖相机的整个视场。
-5. 部分图像中的标定板应有一定倾斜或旋转。
-6. 确保大多数图像中都能看到完整的标定板。
-7. 拍摄时保持相机和标定板静止，避免运动模糊。
-
-### 标定流程
-
-标定流程包括以下步骤：
-
-1. 生成并打印 ChArUco 标定板。
-2. 按照上述说明拍摄多张标定板照片。
-3. 将标定图像放入指定的 `calibration_images_dir`。
-4. 运行 `FisheyeCalibrator` 或 `PinholeCalibrator` 的 `calibrate()` 方法。
-
-### 其他实用方法
-
-`CharucoCalibrator` 类还提供了以下用于处理 ChArUco 标定板的方法：
-
-- `generate_blank_board()`：创建一张空白黑色标定板，以便进行自定义修改。
-- `detect_aruco_markers()`：检测图像中的 ArUco 标记。
-- `detect_charuco_corners()`：检测图像中的 ChArUco 角点。
-- `show_aruco_markers()`：显示图像中检测到的 ArUco 标记。
-- `show_charuco_corners()`：显示图像中检测到的 ChArUco 角点。
-
-这些方法可用于验证标定图像的质量，以及排查标定过程中出现的问题。
-
-## FisheyeCalibrator
-
-`FisheyeCalibrator` 类是一款专为鱼眼相机设计的标定工具。它继承自 `CharucoCalibrator` 基类，提供了使用 ChArUco 标定板标定鱼眼相机、校正鱼眼图像畸变以及导出相机参数的方法。
-
-### 主要功能
-
-1. 针对鱼眼相机的标定
-2. 鱼眼镜头图像去畸变
-3. 以 COLMAP 格式导出相机参数
-
-### 使用方法
-
-#### 初始化
+新版工作流可以直接从 Python 调用：
 
 ```python
-fisheye_calibrator = FisheyeCalibrator(
-    aruco_dict,
-    squares_vertically,
-    squares_horizontally,
-    square_length,
-    marker_length,
-    calibration_images_dir,
-    raw_images_dir
+from pathlib import Path
+
+from calibration import BoardConfig, calibrate_from_directory
+
+config = BoardConfig(
+    pattern_type="charuco",
+    dictionary_name="DICT_5X5_100",
+    squares_horizontal=14,
+    squares_vertical=9,
+    square_length=0.020,
+    marker_length=0.015,
+)
+
+result = calibrate_from_directory(
+    images_dir=Path("data/calibration/images/1920x1080"),
+    config=config,
+    model="fisheye",
+    output_path=Path(
+        "data/calibration/camera_intrinsics/1920x1080/fisheye_calibration.json"
+    ),
 )
 ```
 
-#### 标定
+项目仍导出 `CharucoCalibrator`、`FisheyeCalibrator`、`PinholeCalibrator`，并提供 `RectangularCamera` 和 `ConcentricCamera` 虚拟相机工具。
 
-```python
-fisheye_calibrator.calibrate(
-    grayscale=True,
-    calibration_filename='fisheye_calibration.json',
-    window_size=(480, 480),
-    verbose=False
-)
+## 标定质量建议
+
+- 使用清晰、无运动模糊、不过曝的照片。
+- 标定板应覆盖画面中心、边缘和四角，不要只在同一位置连续拍摄。
+- 保留不同距离、倾斜角度和旋转角度。
+- 正式标定和实际矫正使用相同分辨率与相机模式。
+- 鱼眼镜头尤其需要让标定板靠近视场边缘，以约束外围畸变。
+- 传统棋盘格需要完整内角点区域可见；ChArUco 可容忍一定程度的遮挡。
+
+有效图片不少于 10 张时，程序会基于中位数和 MAD 检查单图重投影误差，并进行第二遍标定。一次最多剔除图片总数的 20%，且至少保留 5 张有效图片。原始照片不会被修改。
+
+## 旧版数据迁移
+
+GUI 启动时会检查旧版目录：
+
+- `data/calibration/images/` 根目录中的图片会根据实际尺寸移动到对应的 `<宽>x<高>/` 目录。
+- 旧版根目录标定 JSON 会复制到对应分辨率的 `camera_intrinsics/` 目录。
+- 迁移只处理支持的图片和参数文件，不会删除归档数据。
+
+## 常见问题
+
+### Windows 找不到或打不开相机
+
+- 在“设置 → 隐私和安全性 → 相机”中允许桌面应用访问相机。
+- 关闭浏览器、会议软件和 Windows 相机应用。
+- 重新插拔 USB 相机后点击“刷新设备”；Windows 可能重新分配数字索引。
+- `pygrabber` 只负责读取名称，即使名称读取失败，程序仍会探测数字索引。
+- 尝试 `640 × 480 @ 30 FPS`，确认驱动支持后再提高格式。
+
+### Linux 找不到或打不开相机
+
+```bash
+ls -l /dev/video*
 ```
 
-该方法执行以下步骤：
+- 确认存在 `/dev/video*` 设备节点。
+- 部分发行版要求把当前用户加入 `video` 组，重新登录后生效。
+- 安装 `v4l-utils` 后可执行 `v4l2-ctl --list-devices` 查看设备映射。
+- 关闭可能占用 V4L2 的浏览器、会议软件或采集程序。
+- 自动发现失败时手动输入 `/dev/video0`。
 
-1. 检测标定图像中的 ChArUco 角点
-2. 收集物体点和图像点
-3. 使用 `cv2.fisheye.calibrate` 执行鱼眼相机标定
-4. 将标定参数保存到 JSON 文件
+### 相机能打开但没有画面
 
-#### 图像去畸变
+- 降低分辨率或帧率。
+- 查看日志中的实际 FOURCC；相机可能不支持请求的 MJPG。
+- 更换 USB 端口或避免使用带宽不足的集线器。
+- 确认没有其他进程独占相机。
 
-```python
-undistorted_image = fisheye_calibrator.undistort_image(
-    image,
-    image_name=None,
-    calibration_filename='fisheye_calibration.json',
-    balance=1,
-    show_image=True,
-    save_image=True,
-    output_path=None,
-    window_size=(480, 480)
-)
+### 标定板能看到但角点为 0
+
+- 确认 ChArUco 字典、方格数、方格边长和标记边长与实体板一致。
+- 默认板为横向 X=`14`、纵向 Y=`9`，不要根据板的摆放方向交换参数。
+- 传统棋盘格填写内角点数，而不是方格数。
+- 避免裁掉棋盘格边缘、严重反光或运动模糊。
+
+### 标定完成后矫正画面异常
+
+- 确认标定参数分辨率与当前相机实际分辨率一致。
+- 先将 `balance` 和“边缘压缩”恢复为 `0.00`。
+- 检查检测识别图中是否存在大量 `SKIPPED` 或明显错误的角点。
+- 重新拍摄覆盖视场边缘的数据，并使用“归档并新建批次”隔离旧照片。
+
+## 开发与测试
+
+Windows PowerShell：
+
+```powershell
+$env:PYTHONPATH="src"
+python -m unittest discover -s tests -v
 ```
 
-![](docs/README_images/undistorted.jpg)
+Linux：
 
-该方法会：
-
-1. 加载标定参数
-2. 使用 `cv2.fisheye.undistortImage` 对输入图像进行去畸变处理
-3. 根据配置显示和保存去畸变后的图像
-
-#### 导出相机参数
-
-```python
-fisheye_calibrator.export_camera_params_colmap(calibration_path=None)
+```bash
+PYTHONPATH=src python -m unittest discover -s tests -v
 ```
 
-该方法以 COLMAP 格式导出相机参数，其中包括：
+也可以安装开发依赖后使用 `pytest`：
 
-- 焦距（`fx`、`fy`）
-- 主点（`cx`、`cy`）
-- 畸变系数（`k1`、`k2`、`k3`、`k4`）
-
-### 关键方法
-
-1. `calibrate()`：使用 ChArUco 标记执行鱼眼相机标定。
-2. `undistort_image()`：使用已标定的参数对鱼眼图像进行去畸变处理。
-3. `export_camera_params_colmap()`：以 COLMAP 格式导出相机参数。
-
-## ConcentricCamera 类
-
-`ConcentricCamera` 类是一种虚拟相机实现，用于将图像划分为多个同心圆区域。对于超广角鱼眼相机，图像外围区域所需的 OpenCV 畸变参数可能不同于中心区域，因此该类旨在帮助按不同视场角（FOV）拆分标定过程。
-
-主要功能：
-
-- 同心圆分割：根据指定的半径比例，将图像划分为多个同心圆区域。
-- 灵活配置：支持配置多个分割区域和自定义重叠比例。
-- 自动处理：自动处理输入目录中的所有图像，并将分割后的图像保存到指定的输出目录。
-
-![](docs/README_images/virtual_cameras.png)
-
-### 初始化
-
-使用 `ConcentricCamera` 类时，需要通过输入和输出目录路径、所需的分割比例以及重叠比例对其进行初始化。
-
-参数：
-
-- **input_folder (str)：** 包含输入图像的目录路径。图像格式可以是 `.jpg`、`.jpeg`、`.png`、`.bmp` 和 `.tiff`。
-- **output_folder (str)：** 保存处理后图像的目录路径。
-- **splits (list of float)：** 用于将图像划分为同心圆的半径比例列表，取值范围为 0 到 1。每个比例表示对应同心圆区域的外半径，其基准为图像高度和宽度中较小的尺寸。
-- **overlap_ratio (float)：** 相邻区域之间的重叠比例，用于定义各同心圆区域相互重叠的程度。
-
-```python
-concentric_cam = ConcentricCamera(
-    input_folder="path/to/input/folder",
-    output_folder="path/to/output/folder",
-    splits=[0.3, 0.6, 0.9],
-    overlap_ratio=0.1
-)
+```bash
+python -m pip install -e ".[dev]"
+python -m pytest -q
 ```
 
-### 创建 ConcentricCamera 实例
+测试覆盖 OpenCV 4.12 API、ChArUco/棋盘格检测、鱼眼映射、照片归档、Windows/Linux 设备发现、后端回退和虚拟相机图像保存。
 
-```python
-concentric_cam = ConcentricCamera(
-    input_folder="path/to/input/folder",
-    output_folder="path/to/output/folder",
-    splits=[0.5, 0.8],  # 使用比例定义分割区域
-    overlap_ratio=0.05  # 定义重叠比例
-)
+## License
 
-# 处理输入目录中的每张图像
-for image_path in concentric_cam.input_image_list:
-    concentric_cam.split_image(image_path)
-```
-
-该代码会读取输入目录中的每张图像，按照指定的半径比例将其分割为多个同心圆区域，并将处理后的各区域保存到指定的输出目录中。每个区域会存储在以分割序号命名的子目录中，例如 `camera_0`、`camera_1` 等。
+本项目使用 [MIT License](licence.txt)。

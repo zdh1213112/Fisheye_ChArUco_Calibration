@@ -25,7 +25,10 @@ class CameraDevice:
     def label(self) -> str:
         if isinstance(self.source, int):
             return f"{self.source}: {self.name}"
-        return self.name
+        source = str(self.source)
+        if self.name and self.name != source:
+            return f"{source}: {self.name}"
+        return source
 
 
 def normalize_camera_source(value: CameraSource) -> CameraSource:
@@ -35,34 +38,41 @@ def normalize_camera_source(value: CameraSource) -> CameraSource:
         return value
 
     text = value.strip()
-    index_text = text.split(":", 1)[0].strip()
-    if index_text.isdigit():
-        return int(index_text)
+    source_text, separator, _ = text.partition(":")
+    source_text = source_text.strip()
+    if source_text.isdigit():
+        return int(source_text)
+    if separator and source_text.startswith("/dev/video"):
+        return source_text
     return text
 
 
 def capture_backend_candidates(platform: str | None = None) -> list[tuple[int, str]]:
     """Return OpenCV capture backends in preferred order for the platform."""
 
-    platform = platform or sys.platform
+    platform = (platform or sys.platform).lower()
     if platform == "win32":
-        candidates = [
-            (getattr(cv2, "CAP_DSHOW", cv2.CAP_ANY), "DirectShow"),
-            (getattr(cv2, "CAP_MSMF", cv2.CAP_ANY), "Media Foundation"),
-            (cv2.CAP_ANY, "自动"),
+        preferred_backends = [
+            ("CAP_DSHOW", "DirectShow"),
+            ("CAP_MSMF", "Media Foundation"),
         ]
     elif platform.startswith("linux"):
-        candidates = [
-            (getattr(cv2, "CAP_V4L2", cv2.CAP_ANY), "V4L2"),
-            (cv2.CAP_ANY, "自动"),
+        preferred_backends = [
+            ("CAP_V4L2", "V4L2"),
         ]
     elif platform == "darwin":
-        candidates = [
-            (getattr(cv2, "CAP_AVFOUNDATION", cv2.CAP_ANY), "AVFoundation"),
-            (cv2.CAP_ANY, "自动"),
+        preferred_backends = [
+            ("CAP_AVFOUNDATION", "AVFoundation"),
         ]
     else:
-        candidates = [(cv2.CAP_ANY, "自动")]
+        preferred_backends = []
+
+    candidates: list[tuple[int, str]] = []
+    for attribute, name in preferred_backends:
+        backend = getattr(cv2, attribute, None)
+        if backend is not None and backend != cv2.CAP_ANY:
+            candidates.append((backend, name))
+    candidates.append((cv2.CAP_ANY, "OpenCV 自动"))
 
     # Some OpenCV builds alias an unavailable platform backend to CAP_ANY.
     unique_candidates: list[tuple[int, str]] = []
@@ -72,6 +82,29 @@ def capture_backend_candidates(platform: str | None = None) -> list[tuple[int, s
             unique_candidates.append((backend, name))
             seen.add(backend)
     return unique_candidates
+
+
+def default_camera_source(platform: str | None = None) -> CameraSource:
+    """Return the editable camera source used when discovery finds nothing."""
+
+    platform = (platform or sys.platform).lower()
+    if platform.startswith("linux"):
+        return "/dev/video0"
+    return 0
+
+
+def camera_access_hint(platform: str | None = None) -> str:
+    """Return an actionable camera-open hint for the current operating system."""
+
+    platform = (platform or sys.platform).lower()
+    if platform == "win32":
+        return "请关闭占用相机的其他程序，并检查 Windows 相机隐私权限。"
+    if platform.startswith("linux"):
+        return (
+            "请关闭占用相机的其他程序，并检查 /dev/video* 访问权限"
+            "（必要时将当前用户加入 video 组）。"
+        )
+    return "请关闭占用相机的其他程序，并检查系统相机权限。"
 
 
 def _windows_friendly_names() -> list[str]:
@@ -85,35 +118,65 @@ def _windows_friendly_names() -> list[str]:
         return []
 
 
+def _release_capture(capture: object) -> None:
+    """Release an OpenCV capture without interrupting fallback handling."""
+
+    try:
+        capture.release()
+    except Exception:  # noqa: BLE001 - cleanup must not hide the next fallback
+        pass
+
+
 def _probe_camera_indices(
     platform: str,
     max_index: int,
     capture_factory: CaptureFactory,
 ) -> list[CameraDevice]:
-    backend = capture_backend_candidates(platform)[0][0]
     devices: list[CameraDevice] = []
     for index in range(max_index):
-        try:
-            capture = capture_factory(index, backend)
-            opened = capture.isOpened()
-        except Exception:  # noqa: BLE001 - skip indices rejected by a driver
-            continue
-        try:
-            if opened:
-                devices.append(CameraDevice(index, f"相机 {index}"))
-        finally:
-            capture.release()
+        capture, _, _ = open_camera_capture(index, platform, capture_factory)
+        if capture is not None:
+            devices.append(CameraDevice(index, f"相机 {index}"))
+            _release_capture(capture)
     return devices
+
+
+def _linux_video_device_paths(device_root: Path) -> list[Path]:
+    """Return Linux V4L2 device paths in numeric index order."""
+
+    return sorted(
+        device_root.glob("video*"),
+        key=lambda path: (
+            int(path.name.removeprefix("video"))
+            if path.name.removeprefix("video").isdigit()
+            else sys.maxsize,
+            path.name,
+        ),
+    )
+
+
+def _linux_friendly_name(device_path: Path, sysfs_root: Path) -> str:
+    """Read a Linux V4L2 device name from sysfs when it is available."""
+
+    try:
+        name = (sysfs_root / device_path.name / "name").read_text(
+            encoding="utf-8"
+        ).strip()
+    except (OSError, UnicodeError):
+        return str(device_path)
+    return name or str(device_path)
 
 
 def list_camera_devices(
     platform: str | None = None,
     max_index: int = 10,
     capture_factory: CaptureFactory = cv2.VideoCapture,
+    device_root: Path | str = Path("/dev"),
+    sysfs_root: Path | str = Path("/sys/class/video4linux"),
 ) -> list[CameraDevice]:
     """Discover cameras using native device enumeration where available."""
 
-    platform = platform or sys.platform
+    platform = (platform or sys.platform).lower()
     if platform == "win32":
         names = _windows_friendly_names()
         if names:
@@ -121,13 +184,12 @@ def list_camera_devices(
         return _probe_camera_indices(platform, max_index, capture_factory)
 
     if platform.startswith("linux"):
-        paths = sorted(
-            Path("/dev").glob("video*"),
-            key=lambda path: int(path.name.removeprefix("video"))
-            if path.name.removeprefix("video").isdigit()
-            else max_index,
-        )
-        return [CameraDevice(str(path), str(path)) for path in paths]
+        paths = _linux_video_device_paths(Path(device_root))
+        sysfs_root = Path(sysfs_root)
+        return [
+            CameraDevice(str(path), _linux_friendly_name(path, sysfs_root))
+            for path in paths
+        ]
 
     return _probe_camera_indices(platform, max_index, capture_factory)
 
@@ -150,16 +212,22 @@ def open_camera_capture(
         try:
             opened = capture.isOpened()
         except Exception:  # noqa: BLE001 - try the next available OpenCV backend
-            capture.release()
+            _release_capture(capture)
             continue
         if opened:
             return capture, backend_name, attempted
-        capture.release()
+        _release_capture(capture)
     return None, "", attempted
 
 
 def fourcc_name(value: float) -> str:
     """Convert OpenCV's numeric FOURCC property into a readable code."""
 
-    code = int(value)
-    return "".join(chr((code >> (8 * offset)) & 0xFF) for offset in range(4)).strip("\x00")
+    try:
+        code = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return ""
+    if code <= 0:
+        return ""
+    name = "".join(chr((code >> (8 * offset)) & 0xFF) for offset in range(4))
+    return "".join(character for character in name if character.isprintable()).strip()

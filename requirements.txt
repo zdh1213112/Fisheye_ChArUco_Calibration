@@ -20,12 +20,12 @@ opencv-contrib-python==4.12.0.88
 packaging==24.1
 pandas==2.2.2
 parso==0.8.4
-pexpect==4.9.0
+pexpect==4.9.0; sys_platform != "win32"
 pillow==10.4.0
 platformdirs==4.2.2
 prompt_toolkit==3.0.47
 psutil==6.0.0
-ptyprocess==0.7.0
+ptyprocess==0.7.0; sys_platform != "win32"
 pure-eval==0.2.2
 Pygments==2.18.0
 PySide6-Essentials==6.7.2

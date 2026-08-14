@@ -1,10 +1,13 @@
-from setuptools import setup, find_packages
-import os
+from pathlib import Path
+
+from setuptools import find_packages, setup
+
+
+PROJECT_ROOT = Path(__file__).resolve().parent
 
 def read_requirements(filename):
     """Read dependencies from a requirements file."""
-    with open(filename) as f:
-        return f.read().splitlines()
+    return (PROJECT_ROOT / filename).read_text(encoding="utf-8").splitlines()
 
 setup(
     name='fisheye_3d_reconstruction',
@@ -12,7 +15,7 @@ setup(
     author='Jamie Milsom',
     author_email='jamieamilsom@gmail.com',
     description='A tool for calibrating cameras and performing 3D reconstruction with ultra-wide fisheye cameras',
-    long_description=open('README.md').read(),
+    long_description=(PROJECT_ROOT / 'README.md').read_text(encoding='utf-8'),
     long_description_content_type='text/markdown',
     url='https://github.com/jamiemilsom/fisheye_3d_reconstruction',
     license='MIT',
