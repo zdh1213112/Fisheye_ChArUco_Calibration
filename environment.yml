@@ -1,0 +1,11 @@
+name: fisheye-charuco
+
+channels:
+  - conda-forge
+
+dependencies:
+  - python=3.10
+  - pip
+  - setuptools
+  - pip:
+      - -e .

@@ -38,6 +38,8 @@ from PySide6.QtWidgets import (
 
 from .camera_devices import (
     CameraSource,
+    camera_access_hint,
+    default_camera_source,
     fourcc_name,
     list_camera_devices,
     normalize_camera_source,
@@ -92,7 +94,7 @@ class CameraThread(QThread):
             backends = "、".join(attempted)
             self.camera_error.emit(
                 f"无法打开相机：{self.device_label}（已尝试 {backends}）。"
-                "请关闭占用相机的其他程序并检查系统相机权限。"
+                f"{camera_access_hint()}"
             )
             return
 
@@ -650,8 +652,8 @@ class CalibrationWindow(QMainWindow):
         )
         self.device_combo.setCurrentIndex(selected_index)
         if not devices:
-            fallback = "0" if sys.platform == "win32" else "/dev/video0"
-            self.device_combo.setEditText(current_text or fallback)
+            fallback = default_camera_source()
+            self.device_combo.setEditText(current_text or str(fallback))
         self.device_combo.blockSignals(False)
         if devices:
             self.append_log(
