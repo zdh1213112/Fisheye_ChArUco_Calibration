@@ -106,6 +106,7 @@ pip install -e . -i https://pypi.tuna.tsinghua.edu.cn/simple
 - 在 Windows 上按相机索引和 DirectShow 设备名称识别 USB/UVC 相机，在 Linux
   上识别 `/dev/video*`，并显示原始实时画面。
 - 可选择 ChArUco 或传统黑白棋盘格，从实时画面拍摄标定照片，并在保存前自动检查角点。
+- 可通过“归档并新建批次”把当前照片安全归档后开始一组全新的标定数据，避免同分辨率照片持续累加。
 - 使用鱼眼模型或针孔模型计算相机内参矩阵 `K`、畸变系数 `D`、RMS 重投影误差、每张图片的误差和 COLMAP 参数。
 - 加载已有标定参数。
 - 同时显示原始实时画面和去畸变后的实时画面。
@@ -145,6 +146,14 @@ python scripts/calibration_gui.py
 - 传统棋盘格拍摄目录为 `data/calibration/images/<宽>x<高>/chessboard/`，不会与已有 ChArUco 照片混用。
 - 参数文件名为 `fisheye_chessboard_calibration.json` 或 `pinhole_chessboard_calibration.json`，不会覆盖原有 ChArUco 参数。
 - 传统棋盘格检测要求完整内角点区域可见；拍摄时尤其要避免裁掉边缘、模糊和强反光。
+
+如果要在相同分辨率下重新拍摄一套干净数据，先点击“归档并新建批次”。程序会把当前标定照片移动到：
+
+```text
+data/calibration/image_archives/<宽>x<高>/<标定板类型>/<时间戳>/
+```
+
+当前活动照片目录随后会变为空目录。旧照片不会被删除；已有鱼眼和针孔参数也会复制到该批次的 `camera_intrinsics/` 子目录中备份。
 
 1. 在“相机设备”中选择相机。Windows 会显示类似
    `1: USB Camera` 的“索引: DirectShow 名称”；Linux 会显示
@@ -196,6 +205,8 @@ python scripts/calibration_gui.py
     original_vs_corrected_0.50.jpg        # 原图和去畸变结果并排对比
     balance_comparison.jpg                # 各 balance 在完整去畸变图上的 ROI
     cropped_balance_comparison.jpg        # 各 balance 实际裁剪结果；仅此图会统一缩放展示
+    metadata.json                         # 分辨率、模型、参数路径等信息
+    ```
 
 ### Windows 相机兼容与排障
 
@@ -205,8 +216,6 @@ python scripts/calibration_gui.py
 - 浏览器、会议软件和系统“相机”应用可能独占 USB 相机。出现“无法打开相机”时，先关闭这些程序，再点击“刷新设备”。
 - 某些相机不支持所选分辨率、帧率或 MJPG。应用会显示驱动最终采用的实际格式；如画面读取失败，请先尝试 `640 × 480` 和 `30 FPS`。
 - 同名相机可通过前面的数字索引区分。重新插拔或更换 USB 端口后，Windows 可能重新排列索引，请再次刷新并按名称选择。
-    metadata.json                         # 分辨率、模型、参数路径等信息
-    ```
 
 程序默认使用 OpenCV 鱼眼模型根据当前分辨率对应的内参矩阵 `K` 和畸变系数 `D` 计算标准去畸变坐标映射。`balance=0` 使用 `Knew=K` 的自然投影；随着 balance 增大，焦距比例从 `1.00` 平滑降低到 `0.70`，逐步增加视场。完整结果保留实际映射产生的有效区域，没有可靠源像素的位置显示为黑色；随后再根据每个投影各自的有效掩膜计算安全 ROI。
 
