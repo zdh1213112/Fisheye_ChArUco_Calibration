@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
@@ -358,6 +359,42 @@ def list_calibration_images(images_dir: Path) -> List[Path]:
         for path in images_dir.iterdir()
         if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
     )
+
+
+def archive_calibration_images(
+    images_dir: Path,
+    archive_root: Path,
+    batch_name: Optional[str] = None,
+) -> Tuple[Optional[Path], List[str]]:
+    """Move the active calibration images into a recoverable batch archive."""
+
+    image_paths = list_calibration_images(images_dir)
+    if not image_paths:
+        return None, []
+
+    base_name = batch_name or datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+    archive_dir = Path(archive_root) / base_name
+    suffix = 1
+    while archive_dir.exists():
+        archive_dir = Path(archive_root) / f"{base_name}_{suffix}"
+        suffix += 1
+    archive_dir.mkdir(parents=True, exist_ok=False)
+
+    archived_names: List[str] = []
+    try:
+        for image_path in image_paths:
+            shutil.move(str(image_path), str(archive_dir / image_path.name))
+            archived_names.append(image_path.name)
+    except Exception:
+        for archived_name in reversed(archived_names):
+            archived_path = archive_dir / archived_name
+            original_path = Path(images_dir) / archived_name
+            if archived_path.exists() and not original_path.exists():
+                shutil.move(str(archived_path), str(original_path))
+        if archive_dir.exists() and not any(archive_dir.iterdir()):
+            archive_dir.rmdir()
+        raise
+    return archive_dir, archived_names
 
 
 def _collect_observations(

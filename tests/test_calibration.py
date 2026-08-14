@@ -1,10 +1,13 @@
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import cv2
 import numpy as np
 
 from calibration.workflow import (
     BoardConfig,
+    archive_calibration_images,
     create_chessboard_object_points,
     create_charuco_board,
     create_undistort_maps,
@@ -103,6 +106,30 @@ class OpenCV412CompatibilityTests(unittest.TestCase):
         np.testing.assert_allclose(points[0], [0.0, 0.0, 0.0])
         np.testing.assert_allclose(points[3], [0.075, 0.0, 0.0])
         np.testing.assert_allclose(points[4], [0.0, 0.025, 0.0])
+
+    def test_active_calibration_images_can_be_archived_as_a_new_batch(self):
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            images_dir = root / "images"
+            archive_root = root / "archives"
+            images_dir.mkdir()
+            (images_dir / "first.jpg").write_bytes(b"first")
+            (images_dir / "second.png").write_bytes(b"second")
+            (images_dir / "notes.txt").write_text("keep", encoding="utf-8")
+
+            archive_dir, archived_names = archive_calibration_images(
+                images_dir,
+                archive_root,
+                batch_name="batch_001",
+            )
+
+            self.assertEqual(archived_names, ["first.jpg", "second.png"])
+            self.assertEqual(archive_dir, archive_root / "batch_001")
+            self.assertFalse((images_dir / "first.jpg").exists())
+            self.assertFalse((images_dir / "second.png").exists())
+            self.assertTrue((images_dir / "notes.txt").exists())
+            self.assertTrue((archive_dir / "first.jpg").exists())
+            self.assertTrue((archive_dir / "second.png").exists())
 
     def test_fisheye_undistort_maps_are_created(self):
         calibration = {

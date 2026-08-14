@@ -1,6 +1,7 @@
 from .calibrate import CharucoCalibrator, FisheyeCalibrator, PinholeCalibrator
 from .workflow import (
     BoardConfig,
+    archive_calibration_images,
     calibrate_from_directory,
     create_balance_crop_roi,
     create_chessboard_object_points,
@@ -15,6 +16,7 @@ from .workflow import (
 
 __all__ = [
     "BoardConfig",
+    "archive_calibration_images",
     "CharucoCalibrator",
     "FisheyeCalibrator",
     "PinholeCalibrator",

@@ -39,6 +39,7 @@ from PySide6.QtWidgets import (
 from .workflow import (
     BoardConfig,
     MIN_CORNERS_PER_IMAGE,
+    archive_calibration_images,
     calibrate_from_directory,
     create_balance_crop_roi,
     create_undistort_maps,
@@ -199,6 +200,9 @@ class CalibrationWindow(QMainWindow):
         self.intrinsics_root = (
             self.project_root / "data" / "calibration" / "camera_intrinsics"
         )
+        self.images_archive_root = (
+            self.project_root / "data" / "calibration" / "image_archives"
+        )
         self.detected_images_root = (
             self.project_root / "data" / "calibration" / "detected_images"
         )
@@ -207,6 +211,7 @@ class CalibrationWindow(QMainWindow):
         )
         self.images_root.mkdir(parents=True, exist_ok=True)
         self.intrinsics_root.mkdir(parents=True, exist_ok=True)
+        self.images_archive_root.mkdir(parents=True, exist_ok=True)
         self.detected_images_root.mkdir(parents=True, exist_ok=True)
         self.realtime_captures_root.mkdir(parents=True, exist_ok=True)
 
@@ -417,6 +422,7 @@ class CalibrationWindow(QMainWindow):
         self.open_camera_button = QPushButton("打开相机")
         self.close_camera_button = QPushButton("关闭相机")
         self.capture_button = QPushButton("拍摄标定照片（空格）")
+        self.new_batch_button = QPushButton("归档并新建批次")
         self.calibrate_button = QPushButton("开始计算标定参数")
         self.load_button = QPushButton("加载已有参数")
         self.correction_button = QPushButton("开始实时矫正")
@@ -429,6 +435,7 @@ class CalibrationWindow(QMainWindow):
         self.open_camera_button.clicked.connect(self.open_camera)
         self.close_camera_button.clicked.connect(self.close_camera)
         self.capture_button.clicked.connect(self.capture_image)
+        self.new_batch_button.clicked.connect(self.start_new_calibration_batch)
         self.calibrate_button.clicked.connect(self.start_calibration)
         self.load_button.clicked.connect(self.load_existing_calibration)
         self.correction_button.clicked.connect(self.toggle_correction)
@@ -438,6 +445,7 @@ class CalibrationWindow(QMainWindow):
             self.open_camera_button,
             self.close_camera_button,
             self.capture_button,
+            self.new_batch_button,
             self.calibrate_button,
             self.load_button,
             self.correction_button,
@@ -532,6 +540,18 @@ class CalibrationWindow(QMainWindow):
         directory.mkdir(parents=True, exist_ok=True)
         return directory
 
+    def calibration_images_archive_dir(
+        self,
+        frame_size: Optional[Tuple[int, int]] = None,
+    ) -> Path:
+        directory = (
+            self.images_archive_root
+            / self.resolution_key(frame_size)
+            / self.selected_pattern()
+        )
+        directory.mkdir(parents=True, exist_ok=True)
+        return directory
+
     def calibration_detected_images_dir(
         self,
         model: str,
@@ -622,6 +642,67 @@ class CalibrationWindow(QMainWindow):
         self.image_count_label.setText(
             f"标定照片（{self.resolution_key()}）：{count} 张"
         )
+
+    @Slot()
+    def start_new_calibration_batch(self) -> None:
+        if self.calibration_thread and self.calibration_thread.isRunning():
+            QMessageBox.information(self, "标定进行中", "请等待当前标定计算完成。")
+            return
+
+        images_dir = self.calibration_images_dir()
+        image_paths = list_calibration_images(images_dir)
+        if not image_paths:
+            message = "当前标定批次没有照片，可以直接开始拍摄新数据。"
+            self.append_log(message)
+            self.set_status(message)
+            QMessageBox.information(self, "新标定批次", message)
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "归档并新建标定批次",
+            f"当前共有 {len(image_paths)} 张标定照片。\n\n"
+            "这些照片不会被删除，而是移动到带时间戳的归档目录；"
+            "当前目录随后会变为空目录。是否继续？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            archive_dir, archived_names = archive_calibration_images(
+                images_dir,
+                self.calibration_images_archive_dir(),
+            )
+            if archive_dir is None:
+                return
+
+            parameter_archive_dir = archive_dir / "camera_intrinsics"
+            for model in ("fisheye", "pinhole"):
+                parameter_path = self.default_calibration_path(model)
+                if parameter_path.is_file():
+                    parameter_archive_dir.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(parameter_path, parameter_archive_dir / parameter_path.name)
+
+            self.calibration = None
+            self.calibration_path = None
+            self.correction_enabled = False
+            self.correction_button.setText("开始实时矫正")
+            self.parameters_text.clear()
+            self.corrected_video.clear_frame("新标定批次尚未生成矫正参数。")
+            self.save_comparison_button.setEnabled(False)
+            self.invalidate_maps()
+            self.refresh_image_count()
+
+            message = (
+                f"已归档 {len(archived_names)} 张照片并新建空批次：{archive_dir}"
+            )
+            self.append_log(message)
+            self.set_status(message)
+            QMessageBox.information(self, "新批次已创建", message)
+        except Exception as error:  # noqa: BLE001 - report archive failures
+            QMessageBox.critical(self, "新建批次失败", str(error))
 
     @Slot()
     def resolution_changed(self) -> None:
@@ -880,6 +961,7 @@ class CalibrationWindow(QMainWindow):
 
         self.calibrate_button.setEnabled(False)
         self.load_button.setEnabled(False)
+        self.new_batch_button.setEnabled(False)
         self.set_status("正在计算标定参数，请稍候……")
 
     @Slot(str)
@@ -923,6 +1005,7 @@ class CalibrationWindow(QMainWindow):
     def on_calibration_finished(self) -> None:
         self.calibrate_button.setEnabled(True)
         self.load_button.setEnabled(True)
+        self.new_batch_button.setEnabled(True)
 
     @Slot()
     def load_existing_calibration(self) -> bool:

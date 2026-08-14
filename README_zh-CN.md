@@ -105,6 +105,7 @@ pip install -e . -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 - 打开 `/dev/video0` USB 鱼眼相机并显示原始实时画面。
 - 可选择 ChArUco 或传统黑白棋盘格，从实时画面拍摄标定照片，并在保存前自动检查角点。
+- 可通过“归档并新建批次”把当前照片安全归档后开始一组全新的标定数据，避免同分辨率照片持续累加。
 - 使用鱼眼模型或针孔模型计算相机内参矩阵 `K`、畸变系数 `D`、RMS 重投影误差、每张图片的误差和 COLMAP 参数。
 - 加载已有标定参数。
 - 同时显示原始实时画面和去畸变后的实时画面。
@@ -140,6 +141,14 @@ python scripts/calibration_gui.py
 - 传统棋盘格拍摄目录为 `data/calibration/images/<宽>x<高>/chessboard/`，不会与已有 ChArUco 照片混用。
 - 参数文件名为 `fisheye_chessboard_calibration.json` 或 `pinhole_chessboard_calibration.json`，不会覆盖原有 ChArUco 参数。
 - 传统棋盘格检测要求完整内角点区域可见；拍摄时尤其要避免裁掉边缘、模糊和强反光。
+
+如果要在相同分辨率下重新拍摄一套干净数据，先点击“归档并新建批次”。程序会把当前标定照片移动到：
+
+```text
+data/calibration/image_archives/<宽>x<高>/<标定板类型>/<时间戳>/
+```
+
+当前活动照片目录随后会变为空目录。旧照片不会被删除；已有鱼眼和针孔参数也会复制到该批次的 `camera_intrinsics/` 子目录中备份。
 
 1. 在“相机设备”中选择 `/dev/video0`。如果重新插拔后设备编号发生变化，点击“刷新设备”。
 2. 选择 `1920 × 1080` 和 `60 FPS`。程序会优先使用 USB 相机支持的 MJPG 格式。
