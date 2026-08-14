@@ -32,6 +32,7 @@ setup(
         'Programming Language :: Python :: 3.12',
         'License :: OSI Approved :: MIT License',
         'Operating System :: Linux',
+        'Operating System :: Microsoft :: Windows',
     ],
     python_requires='>=3.10',
 )
