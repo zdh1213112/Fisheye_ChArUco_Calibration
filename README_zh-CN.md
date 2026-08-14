@@ -54,11 +54,18 @@
 
 ### 方式一：Miniforge（推荐）
 
-Miniforge 能在 Windows 和 Linux 上统一 Python 版本与环境管理，适合开发、测试和现场部署。
+Miniforge 能在 Windows 和 Linux 上统一 Python 版本与环境管理，适合开发、测试和现场部署。当前 Miniforge 已同时提供 `conda` 和 `mamba`；不需要另外安装已经弃用的 Mambaforge。`mamba` 使用并行下载和更快的依赖求解，推荐优先使用。
 
 1. 从 [Miniforge 官方仓库](https://github.com/conda-forge/miniforge) 安装对应系统版本。
 2. Windows 打开 “Miniforge Prompt”，Linux 打开终端。
 3. 进入项目根目录并执行：
+
+```bash
+mamba env create -f environment.yml
+conda activate fisheye-charuco
+```
+
+如果终端中没有 `mamba` 命令，可使用兼容的 Conda 命令：
 
 ```bash
 conda env create -f environment.yml
@@ -71,6 +78,24 @@ conda activate fisheye-charuco
 - Linux 不安装 `pygrabber`。
 - Windows 自动跳过 `pexpect`、`ptyprocess` 等 POSIX 专用依赖。
 
+`mamba` 主要加速 Conda 的仓库访问、包下载和依赖求解。本项目随后会通过 pip 安装 OpenCV、PySide6 等 Python 包，因此整体速度仍会受到 PyPI 网络质量影响。
+
+中国大陆网络可在创建环境前临时设置 pip 镜像。Windows PowerShell：
+
+```powershell
+$env:PIP_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple"
+mamba env create -f environment.yml
+```
+
+Linux：
+
+```bash
+PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \
+mamba env create -f environment.yml
+```
+
+镜像不可用或包版本不同步时，移除 `PIP_INDEX_URL` 后重新使用官方 PyPI。
+
 不激活环境也可以直接启动：
 
 ```bash
@@ -80,7 +105,7 @@ conda run -n fisheye-charuco python scripts/calibration_gui.py
 更新已有环境：
 
 ```bash
-conda env update -n fisheye-charuco -f environment.yml --prune
+mamba env update -n fisheye-charuco -f environment.yml --prune
 ```
 
 删除环境：

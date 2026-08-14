@@ -55,11 +55,18 @@ Run project commands from the repository root and make sure the current user can
 
 ### Option 1: Miniforge (recommended)
 
-Miniforge provides the same Python and environment-management workflow on Windows and Linux.
+Miniforge provides the same Python and environment-management workflow on Windows and Linux. Current Miniforge installers provide both `conda` and `mamba`; the separate Mambaforge distribution is deprecated. Mamba is preferred because it performs parallel downloads and faster dependency solving.
 
 1. Install the appropriate package from the [official Miniforge repository](https://github.com/conda-forge/miniforge).
 2. Open Miniforge Prompt on Windows or a terminal on Linux.
 3. Enter the project root and run:
+
+```bash
+mamba env create -f environment.yml
+conda activate fisheye-charuco
+```
+
+If `mamba` is unavailable in the current terminal, use the compatible Conda command:
 
 ```bash
 conda env create -f environment.yml
@@ -72,6 +79,24 @@ The environment uses Python 3.10 and installs this repository in editable mode. 
 - Linux skips `pygrabber`.
 - Windows skips POSIX-only packages such as `pexpect` and `ptyprocess`.
 
+Mamba accelerates Conda repository access, package downloads, and dependency solving. This project then uses pip to install packages such as OpenCV and PySide6, so total setup time can still depend heavily on PyPI network performance.
+
+Users in mainland China can temporarily select a pip mirror before creating the environment. Windows PowerShell:
+
+```powershell
+$env:PIP_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple"
+mamba env create -f environment.yml
+```
+
+Linux:
+
+```bash
+PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \
+mamba env create -f environment.yml
+```
+
+Remove `PIP_INDEX_URL` and retry with the official PyPI service if the mirror is unavailable or does not contain the required version.
+
 Launch without activating the environment:
 
 ```bash
@@ -81,7 +106,7 @@ conda run -n fisheye-charuco python scripts/calibration_gui.py
 Update an existing environment:
 
 ```bash
-conda env update -n fisheye-charuco -f environment.yml --prune
+mamba env update -n fisheye-charuco -f environment.yml --prune
 ```
 
 Remove the environment:
